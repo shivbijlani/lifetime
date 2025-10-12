@@ -88,12 +88,12 @@ function validateScenarioPayload(candidate: unknown): ScenarioPayload | null {
 
 function generateSmartDefaults(): ScenarioParams {
   const now = new Date();
-  const startYear = now.getFullYear();
+  const startYear = now.getUTCFullYear();
   const seedBase =
     startYear * 1_000_000 +
-    (now.getMonth() + 1) * 10_000 +
-    now.getDate() * 100 +
-    now.getHours();
+    (now.getUTCMonth() + 1) * 10_000 +
+    now.getUTCDate() * 100 +
+    now.getUTCHours();
   const rng = createDeterministicRng(seedBase);
 
   const currentAge = randomInt(rng, 32, 46);
