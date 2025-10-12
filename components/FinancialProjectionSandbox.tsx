@@ -1,0 +1,403 @@
+'use client';
+
+import React, { useEffect, useMemo, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RefreshCcw, Info } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
+
+type Row = {
+  year: number;
+  age: number;
+  stockReturnApplied: number;
+  contribution: number;
+  expenses: {
+    base: number;
+    mortgage: number;
+    vacation: number;
+    upgrades: number;
+    parents: number;
+    kids: number;
+  };
+  totals: {
+    totalExpenses: number;
+    stocksEnd: number;
+    cashEnd: number;
+    realEstateEnd: number;
+    mortgage: number;
+    netWorth: number;
+  };
+};
+
+type Params = ReturnType<typeof defaultParams>;
+
+function defaultParams() {
+  return {
+    startYear: 2025,
+    currentAge: 41,
+    spouseAge: 43,
+    retirementAge: 60,
+    maxAge: 90,
+    stocks0: 3_000_000,
+    cash0: 400_000,
+    realEstate0: 1_600_000,
+    mortgage0: 706_510.1,
+    mortgageRate: 0.0475,
+    mortgagePaymentMonthly: 3_902.21,
+    mortgageEndYear: 2052,
+    mortgageEndMonth: 6,
+    stockReturn: 0.06,
+    cashReturn: 0.03,
+    realEstateReturn: 0.03,
+    inflation: 0.02,
+    baseMonthly: 8_000,
+    vacationMonthly: 1_500,
+    homeUpgradesAnnual: 20_000,
+    parentStart: 2025,
+    parentInc: 2_000,
+    parentEndYear: 2039,
+    kidsStarts: [2027, 2029, 2032],
+    kidsYears: 4,
+    kidsAnnual: 10_000,
+    contribution0: 60_000,
+    contributionGrowth: 0.03,
+    spendFromStocks: true,
+    useGlidepath: true,
+    gpRetMinus20: 0.1,
+    gpRetMinus10: 0.085,
+    gpRetMinus5: 0.065,
+    gpRet0: 0.05,
+    gpPostRet: 0.04,
+  };
+}
+
+function expectedStockReturn(age: number, p: Params): number {
+  const yearsToRetire = p.retirementAge - age;
+  if (yearsToRetire >= 15) return p.gpRetMinus20;
+  if (yearsToRetire >= 7 && yearsToRetire < 15) return p.gpRetMinus10;
+  if (yearsToRetire >= 2 && yearsToRetire < 7) return p.gpRetMinus5;
+  if (yearsToRetire >= 0 && yearsToRetire < 2) return p.gpRet0;
+  return p.gpPostRet;
+}
+
+function computeModel(p: Params) {
+  const rows: Row[] = [];
+  let stocks = p.stocks0;
+  let cash = p.cash0;
+  let re = p.realEstate0;
+  let mortgage = p.mortgage0;
+  const mr = p.mortgageRate / 12;
+  const endYear = p.startYear + (p.maxAge - p.currentAge);
+  for (let year = p.startYear; year <= endYear; year++) {
+    const yrIndex = year - p.startYear;
+    const age = p.currentAge + yrIndex;
+    const working = age < p.retirementAge;
+    const contribution = working ? p.contribution0 * Math.pow(1 + p.contributionGrowth, yrIndex) : 0;
+    const baseAnnual = p.baseMonthly * 12 * Math.pow(1 + p.inflation, yrIndex);
+    const vacAnnual = p.vacationMonthly * 12 * Math.pow(1 + p.inflation, yrIndex);
+    const upgrades = p.homeUpgradesAnnual * Math.pow(1 + p.inflation, yrIndex);
+    let mortAnnual = 0;
+    if (mortgage > 0) {
+      for (let m = 1; m <= 12; m++) {
+        const inWindow = year < p.mortgageEndYear || (year === p.mortgageEndYear && m <= p.mortgageEndMonth);
+        if (!inWindow || mortgage <= 0) break;
+        const interest = mortgage * mr;
+        const principal = Math.min(Math.max(p.mortgagePaymentMonthly - interest, 0), mortgage);
+        mortAnnual += principal + interest;
+        mortgage -= principal;
+      }
+    }
+    let parents = 0;
+    if (year >= p.parentStart && year <= p.parentEndYear) parents = 10_000 + p.parentInc * (year - p.parentStart);
+    let kids = 0;
+    for (const ks of p.kidsStarts) if (year >= ks && year < ks + p.kidsYears) kids += p.kidsAnnual;
+    const totalExpenses = baseAnnual + mortAnnual + vacAnnual + upgrades + parents + kids;
+    const stockR = p.useGlidepath ? expectedStockReturn(age, p) : p.stockReturn;
+    const stocksBefore = stocks * (1 + stockR);
+    const cashBefore = cash * (1 + p.cashReturn);
+    const reBefore = re * (1 + p.realEstateReturn);
+    let stocksAfter = stocksBefore + contribution;
+    let cashAfter = cashBefore;
+    if (p.spendFromStocks) {
+      stocksAfter -= totalExpenses;
+    } else {
+      const cashCover = Math.min(totalExpenses, cashAfter);
+      cashAfter -= cashCover;
+      const remaining = totalExpenses - cashCover;
+      if (remaining > 0) stocksAfter -= remaining;
+    }
+    stocks = Math.max(0, stocksAfter);
+    cash = Math.max(0, cashAfter);
+    re = reBefore;
+    const netWorth = stocks + cash + (re - mortgage);
+    rows.push({
+      year,
+      age,
+      stockReturnApplied: stockR,
+      contribution,
+      expenses: { base: baseAnnual, mortgage: mortAnnual, vacation: vacAnnual, upgrades, parents, kids },
+      totals: { totalExpenses, stocksEnd: stocks, cashEnd: cash, realEstateEnd: re, mortgage, netWorth },
+    });
+  }
+  return rows;
+}
+
+const currency = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+export default function FinancialProjectionSandbox() {
+  const [params, setParams] = useState(defaultParams());
+  const [realDollars, setRealDollars] = useState(false);
+  const rows = useMemo(() => computeModel(params), [params]);
+  const realFactor = (year: number) => (realDollars ? 1 / Math.pow(1 + params.inflation, year - params.startYear) : 1);
+  const reset = () => setParams(defaultParams());
+  useEffect(() => {
+    const p = defaultParams();
+    p.maxAge = 65;
+    const r = computeModel(p);
+    const expected = (p.startYear + (p.maxAge - p.currentAge)) - p.startYear + 1;
+    console.assert(r.length === expected, "row count matches span");
+    const p2 = { ...defaultParams(), mortgage0: 100_000, mortgageRate: 0.05, mortgagePaymentMonthly: 1_000, mortgageEndYear: 2027, mortgageEndMonth: 6, maxAge: 70 } as Params;
+    const r2 = computeModel(p2);
+    const afterEnd = r2.filter(x => x.year > p2.mortgageEndYear).every(x => Math.abs(x.expenses.mortgage) < 1e-6);
+    console.assert(afterEnd, "mortgage ends when specified");
+    const p3a = { ...defaultParams(), spendFromStocks: true, maxAge: 62 } as Params;
+    const p3b = { ...defaultParams(), spendFromStocks: false, cash0: 1_000_000, maxAge: 62 } as Params;
+    const r3a = computeModel(p3a).at(-1)!;
+    const r3b = computeModel(p3b).at(-1)!;
+    console.assert(r3b.cashEnd < 1_000_000, "cash drawn when not spending from stocks");
+    console.assert(r3b.stocksEnd > r3a.stocksEnd, "stocks higher when using cash first");
+    const p4 = { ...defaultParams(), useGlidepath: true, retirementAge: 60, currentAge: 41, maxAge: 45 } as Params;
+    const r4 = computeModel(p4);
+    const hasStockR = r4.some(x => x.stockReturnApplied > 0);
+    console.assert(hasStockR, "glidepath applies returns each year");
+  }, []);
+  return (
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <h1 className="text-2xl font-semibold">Financial Projection Sandbox</h1>
+      <p className="text-sm opacity-80">Adjust assumptions and see your year-by-year outlook through retirement. Toggle inflation adjustment to view amounts in today’s dollars.</p>
+      <Card className="shadow-md">
+        <CardContent className="p-4 grid md:grid-cols-2 gap-6">
+          <div className="space-y-4">
+            <h2 className="font-semibold">Timeline</h2>
+            <div className="space-y-2">
+              <Label>Retirement Age: {params.retirementAge}</Label>
+              <Slider value={[params.retirementAge]} min={50} max={70} step={1} onValueChange={([v]) => setParams({ ...params, retirementAge: v })} />
+              <div className="text-xs text-muted-foreground">Current age: {params.currentAge} · Start year: {params.startYear}</div>
+            </div>
+            <div className="space-y-2">
+              <Label>Projection End Age: {params.maxAge}</Label>
+              <Slider value={[params.maxAge]} min={70} max={100} step={10} onValueChange={([v]) => setParams({ ...params, maxAge: v })} />
+            </div>
+            <div className="space-y-2">
+              <Label>Annual Contribution (start): ${currency(params.contribution0)}</Label>
+              <Input type="number" value={params.contribution0} onChange={(e) => setParams({ ...params, contribution0: Number(e.target.value || 0) })} />
+              <Label>Contribution Growth per Year: {(params.contributionGrowth * 100).toFixed(1)}%</Label>
+              <Slider value={[Math.round(params.contributionGrowth * 1000)]} min={0} max={100} step={1} onValueChange={([v]) => setParams({ ...params, contributionGrowth: v / 1000 })} />
+            </div>
+            <div className="space-y-2">
+              <Label>Toggle: Spend From Stocks Only</Label>
+              <Checkbox checked={params.spendFromStocks} onCheckedChange={(v) => setParams({ ...params, spendFromStocks: Boolean(v) })} />
+            </div>
+            <div className="space-y-2">
+              <Label>Inflation-Adjusted View (today’s dollars)</Label>
+              <Checkbox checked={realDollars} onCheckedChange={(v) => setRealDollars(Boolean(v))} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" onClick={reset}>
+                <RefreshCcw className="w-4 h-4 mr-2" /> Reset
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-4">
+            <h2 className="font-semibold">Return & Inflation Assumptions</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Cash Yield</Label>
+                <Input type="number" step="0.1" value={(params.cashReturn * 100).toFixed(1)} onChange={(e) => setParams({ ...params, cashReturn: Number(e.target.value) / 100 })} />
+              </div>
+              <div>
+                <Label>Inflation</Label>
+                <Input type="number" step="0.1" value={(params.inflation * 100).toFixed(1)} onChange={(e) => setParams({ ...params, inflation: Number(e.target.value) / 100 })} />
+              </div>
+            </div>
+            <h2 className="font-semibold pt-2">Starting Balances</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Cash</Label>
+                <Input type="number" value={params.cash0} onChange={(e) => setParams({ ...params, cash0: Number(e.target.value || 0) })} />
+              </div>
+            </div>
+            <Accordion type="multiple" className="pt-4">
+              <AccordionItem value="equity">
+                <AccordionTrigger className="text-base font-semibold">Equity</AccordionTrigger>
+                <AccordionContent>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2">
+                      <Label>Starting Equity (Stocks)</Label>
+                      <Input type="number" value={params.stocks0} onChange={(e) => setParams({ ...params, stocks0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div className="col-span-2 flex items-center gap-2 pt-2">
+                      <Checkbox checked={params.useGlidepath} onCheckedChange={(v) => setParams({ ...params, useGlidepath: Boolean(v) })} />
+                      <Label className="m-0">Use Glidepath for Equity Returns</Label>
+                    </div>
+                    <div className="col-span-2 grid grid-cols-2 md:grid-cols-3 gap-4">
+                      <div>
+                        <Label>Retirement age − 20 =</Label>
+                        <Input type="number" step="0.1" value={(params.gpRetMinus20 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus20: Number(e.target.value) / 100 })} />
+                      </div>
+                      <div>
+                        <Label>Retirement age − 10 =</Label>
+                        <Input type="number" step="0.1" value={(params.gpRetMinus10 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus10: Number(e.target.value) / 100 })} />
+                      </div>
+                      <div>
+                        <Label>Retirement age − 5 =</Label>
+                        <Input type="number" step="0.1" value={(params.gpRetMinus5 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus5: Number(e.target.value) / 100 })} />
+                      </div>
+                      <div>
+                        <Label>At retirement (X) =</Label>
+                        <Input type="number" step="0.1" value={(params.gpRet0 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRet0: Number(e.target.value) / 100 })} />
+                      </div>
+                      <div>
+                        <Label>Post-retirement =</Label>
+                        <Input type="number" step="0.1" value={(params.gpPostRet * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpPostRet: Number(e.target.value) / 100 })} />
+                      </div>
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="real-estate">
+                <AccordionTrigger className="text-base font-semibold">Real Estate</AccordionTrigger>
+                <AccordionContent>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label>Real Estate Value</Label>
+                      <Input type="number" value={params.realEstate0} onChange={(e) => setParams({ ...params, realEstate0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Real Estate Return (%)</Label>
+                      <Input type="number" step="0.1" value={(params.realEstateReturn * 100).toFixed(1)} onChange={(e) => setParams({ ...params, realEstateReturn: Number(e.target.value) / 100 })} />
+                    </div>
+                    <div className="col-span-2 pt-2">
+                      <Label className="flex items-center gap-2">Home Expenses (Required + Discretionary) <Info className="w-4 h-4 opacity-70" title="Includes ongoing maintenance and planned upgrades." /></Label>
+                      <Input type="number" value={params.homeUpgradesAnnual} onChange={(e) => setParams({ ...params, homeUpgradesAnnual: Number(e.target.value || 0) })} />
+                    </div>
+                  </div>
+                  <h3 className="font-medium pt-4">Mortgage Details</h3>
+                  <div className="grid grid-cols-2 gap-4 pt-2">
+                    <div className="col-span-2">
+                      <Label>Mortgage principal outstanding (today)</Label>
+                      <Input type="number" value={params.mortgage0} onChange={(e) => setParams({ ...params, mortgage0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Rate (%)</Label>
+                      <Input type="number" step="0.01" value={(params.mortgageRate * 100).toFixed(3)} onChange={(e) => setParams({ ...params, mortgageRate: Number(e.target.value) / 100 })} />
+                    </div>
+                    <div>
+                      <Label>Monthly Payment ($)</Label>
+                      <Input type="number" value={params.mortgagePaymentMonthly} onChange={(e) => setParams({ ...params, mortgagePaymentMonthly: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Loan End Year</Label>
+                      <Input type="number" value={params.mortgageEndYear} onChange={(e) => setParams({ ...params, mortgageEndYear: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Loan End Month (1-12)</Label>
+                      <Input type="number" value={params.mortgageEndMonth} onChange={(e) => setParams({ ...params, mortgageEndMonth: Number(e.target.value || 0) })} />
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="shadow-md">
+        <CardContent className="p-4 space-y-4">
+          <h2 className="font-semibold">Projected Net Worth</h2>
+          <div className="w-full h-64">
+            <ResponsiveContainer>
+              <LineChart data={rows.map((r) => ({
+                year: r.year,
+                netWorth: r.totals.netWorth * realFactor(r.year),
+                stocks: r.totals.stocksEnd * realFactor(r.year),
+                cash: r.totals.cashEnd * realFactor(r.year),
+                realEstateEquity: (r.totals.realEstateEnd - r.totals.mortgage) * realFactor(r.year),
+              }))}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="year" />
+                <YAxis tickFormatter={(v) => `$${(v / 1_000_000).toFixed(1)}M`} />
+                <Tooltip formatter={(v: number) => `$${currency(v)}`} />
+                <Legend />
+                <Line type="monotone" dataKey="netWorth" name="Net Worth" dot={false} />
+                <Line type="monotone" dataKey="stocks" name="Stocks" dot={false} />
+                <Line type="monotone" dataKey="cash" name="Cash" dot={false} />
+                <Line type="monotone" dataKey="realEstateEquity" name="Real Estate Equity" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="shadow-md">
+        <CardContent className="p-4">
+          <h2 className="font-semibold mb-3">Year-by-Year Table {realDollars && <span className="text-xs text-muted-foreground">(inflation-adjusted)</span>}</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="py-2 pr-3">Year</th>
+                  <th className="py-2 pr-3">Age</th>
+                  <th className="py-2 pr-3">Stock %</th>
+                  <th className="py-2 pr-3">Contribution</th>
+                  <th className="py-2 pr-3">Base</th>
+                  <th className="py-2 pr-3">Mortgage</th>
+                  <th className="py-2 pr-3">Vacation</th>
+                  <th className="py-2 pr-3">Home Exp.</th>
+                  <th className="py-2 pr-3">Parents</th>
+                  <th className="py-2 pr-3">Kids</th>
+                  <th className="py-2 pr-3">Total Expenses</th>
+                  <th className="py-2 pr-3">Stocks End</th>
+                  <th className="py-2 pr-3">Cash End</th>
+                  <th className="py-2 pr-3">RE (Value)</th>
+                  <th className="py-2 pr-3">Mortgage</th>
+                  <th className="py-2 pr-3">Net Worth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const f = realFactor(r.year);
+                  return (
+                    <tr key={r.year} className="border-b last:border-0">
+                      <td className="py-2 pr-3">{r.year}</td>
+                      <td className="py-2 pr-3">{r.age}</td>
+                      <td className="py-2 pr-3">{(r.stockReturnApplied * 100).toFixed(1)}%</td>
+                      <td className="py-2 pr-3">${currency(r.contribution * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.base * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.mortgage * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.vacation * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.upgrades * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.parents * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.kids * f)}</td>
+                      <td className="py-2 pr-3 font-medium">${currency(r.totals.totalExpenses * f)}</td>
+                      <td className="py-2 pr-3 font-medium">${currency(r.totals.stocksEnd * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.totals.cashEnd * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.totals.realEstateEnd * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.totals.mortgage * f)}</td>
+                      <td className="py-2 pr-3 font-semibold">${currency(r.totals.netWorth * f)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
