@@ -211,8 +211,8 @@ export default function FinancialProjectionSandbox() {
     const p3b = { ...defaultParams(), spendFromStocks: false, cash0: 1_000_000, maxAge: 62 } as Params;
     const r3a = computeModel(p3a).at(-1)!;
     const r3b = computeModel(p3b).at(-1)!;
-    console.assert(r3b.cashEnd < 1_000_000, "cash drawn when not spending from stocks");
-    console.assert(r3b.stocksEnd > r3a.stocksEnd, "stocks higher when using cash first");
+    console.assert(r3b.totals.cashEnd < 1_000_000, "cash drawn when not spending from stocks");
+    console.assert(r3b.totals.stocksEnd > r3a.totals.stocksEnd, "stocks higher when using cash first");
     const p4 = { ...defaultParams(), useGlidepath: true, retirementAge: 60, currentAge: 41, maxAge: 45 } as Params;
     const r4 = computeModel(p4);
     const hasStockR = r4.some(x => x.stockReturnApplied > 0);
@@ -371,7 +371,7 @@ export default function FinancialProjectionSandbox() {
                         <div>
                           <Label className="flex items-center gap-2">
                             Home Expenses (annual)
-                            <Info className="w-4 h-4 opacity-70" title="Plan for maintenance, improvements, and recurring home projects." />
+                            <Info className="w-4 h-4 opacity-70" aria-label="Plan for maintenance, improvements, and recurring home projects." />
                           </Label>
                           <Input type="number" value={params.homeUpgradesAnnual} onChange={(e) => setParams({ ...params, homeUpgradesAnnual: Number(e.target.value || 0) })} />
                         </div>

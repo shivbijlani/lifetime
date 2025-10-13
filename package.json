@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "export": "next build",
+    "postexport": "node -e \"const fs=require('fs');const path='out/index.html';if(fs.existsSync(path)){fs.copyFileSync(path,'out/404.html');}\""
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.1.2",
