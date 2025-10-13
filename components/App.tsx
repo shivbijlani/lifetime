@@ -12,6 +12,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { useSearchParams } from "next/navigation";
 import { defaultParams, deriveParamsFromQuery, type ScenarioParams } from "@/lib/scenario";
+import { SITE_TAGLINE, SITE_TITLE } from "@/lib/branding";
 
 type Row = {
   year: number;
@@ -141,7 +142,7 @@ const trendLineColors = {
   realEstateEquity: "#9333ea",
 };
 
-export default function FinancialProjectionSandbox() {
+export default function App() {
   const searchParams = useSearchParams();
   const initialParamsRef = useRef<Params | null>(null);
   const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -220,8 +221,11 @@ export default function FinancialProjectionSandbox() {
   }, []);
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <h1 className="text-2xl font-semibold">Financial Projection Sandbox</h1>
-      <p className="text-sm opacity-80">Adjust assumptions and see your year-by-year outlook through retirement. Toggle inflation adjustment to view amounts in today’s dollars.</p>
+      <h1 className="text-2xl font-semibold">{SITE_TITLE}</h1>
+      <p className="text-sm opacity-80">
+        {SITE_TAGLINE} Adjust assumptions and see your year-by-year outlook through retirement, with options to view
+        everything in today’s dollars.
+      </p>
       <Card className="shadow-md">
         <CardContent className="p-4 grid md:grid-cols-2 gap-6">
           <div className="space-y-4">

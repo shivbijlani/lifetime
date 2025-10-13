@@ -1,4 +1,4 @@
-const repoName = process.env.NEXT_PUBLIC_BASE_PATH?.replace(/^\/+|\/+$/g, "") || "foresightapp";
+const repoName = process.env.NEXT_PUBLIC_BASE_PATH?.replace(/^\/+|\/+$/g, "") || "lifetime";
 const isProd = process.env.NODE_ENV === "production";
 
 /** @type {import('next').NextConfig} */

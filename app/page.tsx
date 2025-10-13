@@ -1,11 +1,11 @@
 import { Suspense } from "react";
-import FinancialProjectionSandbox from "@/components/FinancialProjectionSandbox";
+import App from "@/components/App";
 
 export default function Home() {
   return (
     <main className="min-h-screen bg-background text-foreground">
       <Suspense fallback={<div className="p-6">Loading projection…</div>}>
-        <FinancialProjectionSandbox />
+        <App />
       </Suspense>
     </main>
   );

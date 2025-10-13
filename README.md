@@ -1,38 +1,37 @@
-# ForesightFlow
-Interactive financial projection sandbox built with Next.js, Tailwind CSS, and Shadcn-inspired UI components.
+# Lifetime
+Because peace of mind is worth planning for. Lifetime lets you explore long-term finances with adjustable income, savings, and inflation assumptions. Built with Next.js, Tailwind CSS, and shadcn-inspired UI primitives.
+
+> To rebrand the app, edit `lib/branding.ts`. UI text and metadata read from those constants, so the rest of the code stays unchanged.
 
 ## Getting Started
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Run the development server:
-   ```bash
-   npm run dev
-   ```
-3. Open http://localhost:3000 in your browser to explore the sandbox.
+```bash
+npm install
+npm run dev
+# visit http://localhost:3000
+```
+
+When exporting for GitHub Pages, set `NEXT_PUBLIC_BASE_PATH=/lifetime` (or your repository name) before running `npm run export`.
 
 ## Project Structure
 
-- `app/` – Next.js App Router entry points (`layout.tsx`, `page.tsx`, global styles).
-- `components/` – Reusable UI blocks including `FinancialProjectionSandbox`.
-- `components/ui/` – Shadcn-inspired primitives (button, card, accordion, etc.).
-- `lib/` – Utility helpers (currently Tailwind class name merger).
+- `app/` – App Router entry points (`layout.tsx`, `page.tsx`, global styles).
+- `components/` – UI, including the generic `App` experience.
+- `components/ui/` – shadcn-inspired primitives (button, card, accordion, etc.).
+- `lib/` – Utility helpers (e.g., Tailwind class name merger).
 - `public/` – Static assets.
 
-## Financial Projection Sandbox
+## Model Highlights
 
-The sandbox models year-by-year wealth outcomes using adjustable assumptions:
+The model simulates yearly wealth through retirement using configurable:
 
-- Retirement timeline, contribution strategy, and glidepath returns.
-- Core expenses including housing, travel, family support, and mortgage dynamics.
-- Charts generated with Recharts and a detailed tabular view with optional inflation adjustment.
-
-The component includes inline assertions that sanity check the projection model during development.
+- Contributions, income, and retirement timing.
+- Housing costs, travel, family support, and mortgage payoff schedules.
+- Asset growth assumptions, including optional glidepath returns.
+- Inflation-adjusted charts (Recharts) and detailed tables.
 
 ## Next Steps
 
-- Customize UI theming via Tailwind tokens in `app/globals.css`.
-- Extend the sandbox with scenario presets or export features.
-- Deploy with `npm run build` followed by your preferred deployment workflow (Vercel, Docker, etc.).
+- Tailor theming via Tailwind tokens in `app/globals.css`.
+- Add scenario presets or export tools for sharing results.
+- Deploy with `npm run build` or static export + GitHub Pages.
