@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RefreshCcw, Info } from "lucide-react";
+import { RefreshCcw, Info, Link2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { useSearchParams } from "next/navigation";
@@ -18,6 +18,7 @@ type Row = {
   age: number;
   stockReturnApplied: number;
   contribution: number;
+  income: number;
   expenses: {
     base: number;
     mortgage: number;
@@ -28,6 +29,7 @@ type Row = {
   };
   totals: {
     totalExpenses: number;
+    savingsFundedExpenses: number;
     stocksEnd: number;
     cashEnd: number;
     realEstateEnd: number;
@@ -78,50 +80,123 @@ function computeModel(p: Params) {
     if (year >= p.parentStart && year <= p.parentEndYear) parents = 10_000 + p.parentInc * (year - p.parentStart);
     let kids = 0;
     for (const ks of p.kidsStarts) if (year >= ks && year < ks + p.kidsYears) kids += p.kidsAnnual;
-    const totalExpenses = baseAnnual + mortAnnual + vacAnnual + upgrades + parents + kids;
+    const incomeFunded = baseAnnual + mortAnnual + vacAnnual + upgrades;
+    const totalExpenses = incomeFunded + parents + kids;
+    const income = working ? incomeFunded : 0;
+    const savingsFundedExpenses = Math.max(totalExpenses - income, 0);
     const stockR = p.useGlidepath ? expectedStockReturn(age, p) : p.stockReturn;
     const stocksBefore = stocks * (1 + stockR);
     const cashBefore = cash * (1 + p.cashReturn);
     const reBefore = re * (1 + p.realEstateReturn);
     let stocksAfter = stocksBefore + contribution;
     let cashAfter = cashBefore;
+    let remainingExpenses = savingsFundedExpenses;
     if (p.spendFromStocks) {
-      stocksAfter -= totalExpenses;
+      const coveredByStocks = Math.min(stocksAfter, remainingExpenses);
+      stocksAfter -= coveredByStocks;
+      remainingExpenses -= coveredByStocks;
+      if (remainingExpenses > 0) {
+        const coveredByCash = Math.min(cashAfter, remainingExpenses);
+        cashAfter -= coveredByCash;
+        remainingExpenses -= coveredByCash;
+      }
     } else {
-      const cashCover = Math.min(totalExpenses, cashAfter);
-      cashAfter -= cashCover;
-      const remaining = totalExpenses - cashCover;
-      if (remaining > 0) stocksAfter -= remaining;
+      const coveredByCash = Math.min(cashAfter, remainingExpenses);
+      cashAfter -= coveredByCash;
+      remainingExpenses -= coveredByCash;
+      if (remainingExpenses > 0) {
+        const coveredByStocks = Math.min(stocksAfter, remainingExpenses);
+        stocksAfter -= coveredByStocks;
+        remainingExpenses -= coveredByStocks;
+      }
+    }
+    const shortfall = Math.max(0, remainingExpenses);
+    const hasShortfall = shortfall > 1e-6;
+    if (hasShortfall) {
+      stocksAfter = 0;
+      cashAfter = 0;
     }
     stocks = Math.max(0, stocksAfter);
     cash = Math.max(0, cashAfter);
     re = reBefore;
-    const netWorth = stocks + cash + (re - mortgage);
+    const netWorth = hasShortfall ? 0 : stocks + cash + (re - mortgage);
     rows.push({
       year,
       age,
       stockReturnApplied: stockR,
       contribution,
+      income,
       expenses: { base: baseAnnual, mortgage: mortAnnual, vacation: vacAnnual, upgrades, parents, kids },
-      totals: { totalExpenses, stocksEnd: stocks, cashEnd: cash, realEstateEnd: re, mortgage, netWorth },
+      totals: { totalExpenses, savingsFundedExpenses, stocksEnd: stocks, cashEnd: cash, realEstateEnd: re, mortgage, netWorth },
     });
   }
   return rows;
 }
 
 const currency = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+const trendLineColors = {
+  netWorth: "#2563eb",
+  stocks: "#16a34a",
+  cash: "#f59e0b",
+  realEstateEquity: "#9333ea",
+};
 
 export default function FinancialProjectionSandbox() {
   const searchParams = useSearchParams();
   const initialParamsRef = useRef<Params | null>(null);
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   if (!initialParamsRef.current) {
     initialParamsRef.current = deriveParamsFromQuery(searchParams);
   }
   const [params, setParams] = useState<Params>(() => initialParamsRef.current ?? defaultParams());
   const [realDollars, setRealDollars] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const rows = useMemo(() => computeModel(params), [params]);
   const realFactor = (year: number) => (realDollars ? 1 / Math.pow(1 + params.inflation, year - params.startYear) : 1);
+  const incomeFundedSubtotal =
+    params.baseMonthly * 12 + params.vacationMonthly * 12 + params.homeUpgradesAnnual + params.mortgagePaymentMonthly * 12;
   const reset = () => setParams(initialParamsRef.current ?? defaultParams());
+  const handleCopyReset = useCallback(() => {
+    if (copyResetTimer.current) {
+      clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = null;
+    }
+  }, []);
+  const handleSave = useCallback(async () => {
+    if (typeof window === "undefined") return;
+    try {
+      handleCopyReset();
+      const payload = { version: 1, params };
+      const base64 = typeof window.btoa === "function" ? window.btoa(JSON.stringify(payload)) : null;
+      if (!base64) throw new Error("Missing base64 encoder");
+      const shareUrl = new URL(window.location.pathname, window.location.origin);
+      shareUrl.searchParams.set("scenario", base64);
+      const text = shareUrl.toString();
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+      setCopyStatus("copied");
+      copyResetTimer.current = setTimeout(() => {
+        setCopyStatus("idle");
+        copyResetTimer.current = null;
+      }, 2500);
+    } catch (error) {
+      console.error("Failed to copy scenario link", error);
+      setCopyStatus("error");
+      copyResetTimer.current = setTimeout(() => {
+        setCopyStatus("idle");
+        copyResetTimer.current = null;
+      }, 4000);
+    }
+  }, [handleCopyReset, params]);
+  useEffect(() => () => handleCopyReset(), [handleCopyReset]);
   useEffect(() => {
     const p = defaultParams();
     p.maxAge = 65;
@@ -153,7 +228,7 @@ export default function FinancialProjectionSandbox() {
             <h2 className="font-semibold">Timeline</h2>
             <div className="space-y-2">
               <Label>Retirement Age: {params.retirementAge}</Label>
-              <Slider value={[params.retirementAge]} min={50} max={70} step={1} onValueChange={([v]) => setParams({ ...params, retirementAge: v })} />
+              <Slider value={[params.retirementAge]} min={params.currentAge} max={70} step={1} onValueChange={([v]) => setParams({ ...params, retirementAge: v })} />
               <div className="text-xs text-muted-foreground">Current age: {params.currentAge} · Start year: {params.startYear}</div>
             </div>
             <div className="space-y-2">
@@ -214,24 +289,23 @@ export default function FinancialProjectionSandbox() {
                     </div>
                     <div className="col-span-2 grid grid-cols-2 md:grid-cols-3 gap-4">
                       <div>
-                        <Label>Retirement age − 20 =</Label>
+                        <Label>{`Retirement age (${params.retirementAge}) − 20 =`}</Label>
                         <Input type="number" step="0.1" value={(params.gpRetMinus20 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus20: Number(e.target.value) / 100 })} />
                       </div>
                       <div>
-                        <Label>Retirement age − 10 =</Label>
+                        <Label>{`Retirement age (${params.retirementAge}) − 10 =`}</Label>
                         <Input type="number" step="0.1" value={(params.gpRetMinus10 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus10: Number(e.target.value) / 100 })} />
                       </div>
                       <div>
-                        <Label>Retirement age − 5 =</Label>
+                        <Label>{`Retirement age (${params.retirementAge}) − 5 =`}</Label>
                         <Input type="number" step="0.1" value={(params.gpRetMinus5 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus5: Number(e.target.value) / 100 })} />
                       </div>
                       <div>
-                        <Label>At retirement (X) =</Label>
-                        <Input type="number" step="0.1" value={(params.gpRet0 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRet0: Number(e.target.value) / 100 })} />
-                      </div>
-                      <div>
-                        <Label>Post-retirement =</Label>
-                        <Input type="number" step="0.1" value={(params.gpPostRet * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpPostRet: Number(e.target.value) / 100 })} />
+                        <Label>{`Post-retirement (${params.retirementAge}) =`}</Label>
+                        <Input type="number" step="0.1" value={(params.gpPostRet * 100).toFixed(1)} onChange={(e) => {
+                          const value = Number(e.target.value) / 100;
+                          setParams({ ...params, gpPostRet: value, gpRet0: value });
+                        }} />
                       </div>
                     </div>
                   </div>
@@ -249,10 +323,6 @@ export default function FinancialProjectionSandbox() {
                       <Label>Real Estate Return (%)</Label>
                       <Input type="number" step="0.1" value={(params.realEstateReturn * 100).toFixed(1)} onChange={(e) => setParams({ ...params, realEstateReturn: Number(e.target.value) / 100 })} />
                     </div>
-                    <div className="col-span-2 pt-2">
-                      <Label className="flex items-center gap-2">Home Expenses (Required + Discretionary) <Info className="w-4 h-4 opacity-70" title="Includes ongoing maintenance and planned upgrades." /></Label>
-                      <Input type="number" value={params.homeUpgradesAnnual} onChange={(e) => setParams({ ...params, homeUpgradesAnnual: Number(e.target.value || 0) })} />
-                    </div>
                   </div>
                   <h3 className="font-medium pt-4">Mortgage Details</h3>
                   <div className="grid grid-cols-2 gap-4 pt-2">
@@ -265,7 +335,7 @@ export default function FinancialProjectionSandbox() {
                       <Input type="number" step="0.01" value={(params.mortgageRate * 100).toFixed(3)} onChange={(e) => setParams({ ...params, mortgageRate: Number(e.target.value) / 100 })} />
                     </div>
                     <div>
-                      <Label>Monthly Payment ($)</Label>
+                      <Label>Mortgage Payment (monthly)</Label>
                       <Input type="number" value={params.mortgagePaymentMonthly} onChange={(e) => setParams({ ...params, mortgagePaymentMonthly: Number(e.target.value || 0) })} />
                     </div>
                     <div>
@@ -275,6 +345,87 @@ export default function FinancialProjectionSandbox() {
                     <div>
                       <Label>Loan End Month (1-12)</Label>
                       <Input type="number" value={params.mortgageEndMonth} onChange={(e) => setParams({ ...params, mortgageEndMonth: Number(e.target.value || 0) })} />
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="expenses">
+                <AccordionTrigger className="text-base font-semibold">Expenses</AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-6">
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Income Funded Expenses</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Aim for your earned income to cover these core costs before retirement; after you retire, these will be drawn from
+                        your savings.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <Label>Base Spending (monthly)</Label>
+                          <Input type="number" value={params.baseMonthly} onChange={(e) => setParams({ ...params, baseMonthly: Number(e.target.value || 0) })} />
+                        </div>
+                        <div>
+                          <Label>Vacation (monthly)</Label>
+                          <Input type="number" value={params.vacationMonthly} onChange={(e) => setParams({ ...params, vacationMonthly: Number(e.target.value || 0) })} />
+                        </div>
+                        <div>
+                          <Label className="flex items-center gap-2">
+                            Home Expenses (annual)
+                            <Info className="w-4 h-4 opacity-70" title="Plan for maintenance, improvements, and recurring home projects." />
+                          </Label>
+                          <Input type="number" value={params.homeUpgradesAnnual} onChange={(e) => setParams({ ...params, homeUpgradesAnnual: Number(e.target.value || 0) })} />
+                        </div>
+                        <div>
+                          <Label>Mortgage Payment (monthly)</Label>
+                          <Input type="number" value={params.mortgagePaymentMonthly} onChange={(e) => setParams({ ...params, mortgagePaymentMonthly: Number(e.target.value || 0) })} />
+                        </div>
+                      </div>
+                      <div className="rounded-md bg-muted px-3 py-2 text-sm font-medium">
+                        Annual subtotal: ${currency(incomeFundedSubtotal)}
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Savings Funded Expenses</h3>
+                      <p className="text-sm text-muted-foreground">Customize support that will be funded from savings or portfolio withdrawals.</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <Label>Parent Support Begins (year)</Label>
+                          <Input type="number" value={params.parentStart} onChange={(e) => setParams({ ...params, parentStart: Number(e.target.value || 0) })} />
+                        </div>
+                        <div>
+                          <Label>Parent Support Ends (year)</Label>
+                          <Input type="number" value={params.parentEndYear} onChange={(e) => setParams({ ...params, parentEndYear: Number(e.target.value || 0) })} />
+                        </div>
+                        <div>
+                          <Label>Annual Increase for Parents ($)</Label>
+                          <Input type="number" value={params.parentInc} onChange={(e) => setParams({ ...params, parentInc: Number(e.target.value || 0) })} />
+                        </div>
+                        <div>
+                          <Label>Kids Cost (annual)</Label>
+                          <Input type="number" value={params.kidsAnnual} onChange={(e) => setParams({ ...params, kidsAnnual: Number(e.target.value || 0) })} />
+                        </div>
+                        <div>
+                          <Label>Kids Support Duration (years)</Label>
+                          <Input type="number" value={params.kidsYears} onChange={(e) => setParams({ ...params, kidsYears: Number(e.target.value || 0) })} />
+                        </div>
+                        <div className="md:col-span-2">
+                          <Label>Kids Start Years (comma separated)</Label>
+                          <Input
+                            type="text"
+                            value={params.kidsStarts.join(", ")}
+                            onChange={(e) => {
+                              const next = e.target.value
+                                .split(",")
+                                .map((piece) => piece.trim())
+                                .filter((piece) => piece.length > 0)
+                                .map((piece) => Number(piece))
+                                .filter((num) => Number.isFinite(num))
+                                .sort((a, b) => a - b);
+                              setParams({ ...params, kidsStarts: next });
+                            }}
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </AccordionContent>
@@ -301,10 +452,16 @@ export default function FinancialProjectionSandbox() {
                 <YAxis tickFormatter={(v) => `$${(v / 1_000_000).toFixed(1)}M`} />
                 <Tooltip formatter={(v: number) => `$${currency(v)}`} />
                 <Legend />
-                <Line type="monotone" dataKey="netWorth" name="Net Worth" dot={false} />
-                <Line type="monotone" dataKey="stocks" name="Stocks" dot={false} />
-                <Line type="monotone" dataKey="cash" name="Cash" dot={false} />
-                <Line type="monotone" dataKey="realEstateEquity" name="Real Estate Equity" dot={false} />
+                <Line type="monotone" dataKey="netWorth" name="Net Worth" dot={false} stroke={trendLineColors.netWorth} />
+                <Line type="monotone" dataKey="stocks" name="Stocks" dot={false} stroke={trendLineColors.stocks} />
+                <Line type="monotone" dataKey="cash" name="Cash" dot={false} stroke={trendLineColors.cash} />
+                <Line
+                  type="monotone"
+                  dataKey="realEstateEquity"
+                  name="Real Estate Equity"
+                  dot={false}
+                  stroke={trendLineColors.realEstateEquity}
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -322,6 +479,7 @@ export default function FinancialProjectionSandbox() {
                   <th className="py-2 pr-3">Age</th>
                   <th className="py-2 pr-3">Stock %</th>
                   <th className="py-2 pr-3">Contribution</th>
+                  <th className="py-2 pr-3">Income</th>
                   <th className="py-2 pr-3">Base</th>
                   <th className="py-2 pr-3">Mortgage</th>
                   <th className="py-2 pr-3">Vacation</th>
@@ -329,6 +487,7 @@ export default function FinancialProjectionSandbox() {
                   <th className="py-2 pr-3">Parents</th>
                   <th className="py-2 pr-3">Kids</th>
                   <th className="py-2 pr-3">Total Expenses</th>
+                  <th className="py-2 pr-3">Savings Funded Exp.</th>
                   <th className="py-2 pr-3">Stocks End</th>
                   <th className="py-2 pr-3">Cash End</th>
                   <th className="py-2 pr-3">RE (Value)</th>
@@ -345,6 +504,7 @@ export default function FinancialProjectionSandbox() {
                       <td className="py-2 pr-3">{r.age}</td>
                       <td className="py-2 pr-3">{(r.stockReturnApplied * 100).toFixed(1)}%</td>
                       <td className="py-2 pr-3">${currency(r.contribution * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.income * f)}</td>
                       <td className="py-2 pr-3">${currency(r.expenses.base * f)}</td>
                       <td className="py-2 pr-3">${currency(r.expenses.mortgage * f)}</td>
                       <td className="py-2 pr-3">${currency(r.expenses.vacation * f)}</td>
@@ -352,6 +512,7 @@ export default function FinancialProjectionSandbox() {
                       <td className="py-2 pr-3">${currency(r.expenses.parents * f)}</td>
                       <td className="py-2 pr-3">${currency(r.expenses.kids * f)}</td>
                       <td className="py-2 pr-3 font-medium">${currency(r.totals.totalExpenses * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.totals.savingsFundedExpenses * f)}</td>
                       <td className="py-2 pr-3 font-medium">${currency(r.totals.stocksEnd * f)}</td>
                       <td className="py-2 pr-3">${currency(r.totals.cashEnd * f)}</td>
                       <td className="py-2 pr-3">${currency(r.totals.realEstateEnd * f)}</td>
@@ -365,6 +526,23 @@ export default function FinancialProjectionSandbox() {
           </div>
         </CardContent>
       </Card>
+
+      <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-end">
+        <Button onClick={handleSave}>
+          <Link2 className="w-4 h-4 mr-2" />
+          {copyStatus === "copied" ? "Link Copied" : copyStatus === "error" ? "Copy Failed - Try Again" : "Save Scenario"}
+        </Button>
+        {copyStatus === "copied" && (
+          <span className="text-sm text-muted-foreground" aria-live="polite">
+            Link copied to clipboard.
+          </span>
+        )}
+        {copyStatus === "error" && (
+          <span className="text-sm text-destructive" aria-live="polite">
+            Could not copy link. Please try again.
+          </span>
+        )}
+      </div>
     </div>
   );
 }

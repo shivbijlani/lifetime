@@ -112,10 +112,10 @@ function generateSmartDefaults(): ScenarioParams {
   const mortgageEndMonth = randomInt(rng, 1, 12);
   const mortgagePaymentMonthly = calculateMortgagePayment(mortgage0, mortgageRate, mortgageTermYears);
 
-  const stockReturn = randomRounded(rng, 0.055, 0.07, 0.0005);
-  const cashReturn = randomRounded(rng, 0.02, 0.035, 0.0005);
+  const stockReturn = 0.07;
+  const cashReturn = 0.02;
   const realEstateReturn = randomRounded(rng, 0.025, 0.04, 0.0005);
-  const inflation = 0.02;
+  const inflation = 0.028;
 
   const baseMonthly = randomRounded(rng, 6_000, 8_500, 250);
   const vacationMonthly = randomRounded(rng, 900, 1_400, 50);
