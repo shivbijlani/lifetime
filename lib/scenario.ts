@@ -61,7 +61,10 @@ export function deriveParamsFromQuery(searchParams: ReadonlyURLSearchParams | nu
     return base;
   }
   if (!payload.params || typeof payload.params !== "object") return base;
-  return { ...base, ...payload.params };
+  const overrides = Object.fromEntries(
+    Object.entries(payload.params).filter(([, value]) => value !== undefined),
+  ) as Partial<ScenarioParams>;
+  return { ...base, ...overrides };
 }
 
 function parseScenarioPayload(raw: string): ScenarioPayload | null {
@@ -88,7 +91,7 @@ function validateScenarioPayload(candidate: unknown): ScenarioPayload | null {
 
 function generateSmartDefaults(): ScenarioParams {
   const now = new Date();
-  const startYear = now.getUTCFullYear();
+  const startYear = now.getUTCFullYear() + 1;
   const seedBase =
     startYear * 1_000_000 +
     (now.getUTCMonth() + 1) * 10_000 +

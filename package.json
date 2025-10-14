@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "export": "next build",
-    "postexport": "node -e \"const fs=require('fs');const path='out/index.html';if(fs.existsSync(path)){fs.copyFileSync(path,'out/404.html');}\""
+    "postexport": "node -e \"const fs=require('fs');const path='out/index.html';if(fs.existsSync(path)){fs.copyFileSync(path,'out/404.html');}\"",
+    "deploy:pages": "bash scripts/deploy-gh-pages.sh"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.1.2",

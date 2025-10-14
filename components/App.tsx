@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RefreshCcw, Info, Link2 } from "lucide-react";
+import { Info, Link2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { useSearchParams } from "next/navigation";
@@ -153,10 +153,10 @@ export default function App() {
   const [realDollars, setRealDollars] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const rows = useMemo(() => computeModel(params), [params]);
+  const projectionEndYear = params.startYear + (params.maxAge - params.currentAge);
   const realFactor = (year: number) => (realDollars ? 1 / Math.pow(1 + params.inflation, year - params.startYear) : 1);
   const incomeFundedSubtotal =
     params.baseMonthly * 12 + params.vacationMonthly * 12 + params.homeUpgradesAnnual + params.mortgagePaymentMonthly * 12;
-  const reset = () => setParams(initialParamsRef.current ?? defaultParams());
   const handleCopyReset = useCallback(() => {
     if (copyResetTimer.current) {
       clearTimeout(copyResetTimer.current);
@@ -221,10 +221,13 @@ export default function App() {
   }, []);
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <h1 className="text-2xl font-semibold">{SITE_TITLE}</h1>
+      <h1 className="text-2xl font-semibold flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
+        <span>{SITE_TITLE}</span>
+        <span className="text-base font-normal text-muted-foreground">{SITE_TAGLINE}</span>
+      </h1>
       <p className="text-sm opacity-80">
-        {SITE_TAGLINE} Adjust assumptions and see your year-by-year outlook through retirement, with options to view
-        everything in today’s dollars.
+        Adjust assumptions and see your year-by-year outlook through retirement, with options to view everything in
+        today’s dollars.
       </p>
       <Card className="shadow-md">
         <CardContent className="p-4 grid md:grid-cols-2 gap-6">
@@ -232,93 +235,232 @@ export default function App() {
             <h2 className="font-semibold">Timeline</h2>
             <div className="space-y-2">
               <Label>Retirement Age: {params.retirementAge}</Label>
-              <Slider value={[params.retirementAge]} min={params.currentAge} max={70} step={1} onValueChange={([v]) => setParams({ ...params, retirementAge: v })} />
-              <div className="text-xs text-muted-foreground">Current age: {params.currentAge} · Start year: {params.startYear}</div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  className="w-24"
+                  min={18}
+                  max={70}
+                  value={params.currentAge}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (!Number.isFinite(next)) return;
+                    const bounded = Math.min(Math.max(Math.round(next), 0), 120);
+                    setParams((prev) => ({
+                      ...prev,
+                      currentAge: bounded,
+                      retirementAge: Math.max(bounded, prev.retirementAge),
+                    }));
+                  }}
+                  onBlur={() =>
+                    setParams((prev) => {
+                      const clamped = Math.max(18, Math.min(prev.currentAge, 70));
+                      if (clamped === prev.currentAge) return prev;
+                      return {
+                        ...prev,
+                        currentAge: clamped,
+                        retirementAge: Math.max(clamped, prev.retirementAge),
+                      };
+                    })
+                  }
+                />
+                <Slider
+                  className="flex-1"
+                  value={[params.retirementAge]}
+                  min={params.currentAge}
+                  max={70}
+                  step={1}
+                  onValueChange={([value]) =>
+                    setParams((prev) => {
+                      const next = Math.min(Math.max(value, prev.currentAge), 70);
+                      if (next === prev.retirementAge) return prev;
+                      return {
+                        ...prev,
+                        retirementAge: next,
+                      };
+                    })
+                  }
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Projection End Age: {params.maxAge}</Label>
               <Slider value={[params.maxAge]} min={70} max={100} step={10} onValueChange={([v]) => setParams({ ...params, maxAge: v })} />
+              <div className="text-xs text-muted-foreground">
+                Current age: {params.currentAge} · Start year: {params.startYear} · End year: {projectionEndYear}
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Annual Contribution (start): ${currency(params.contribution0)}</Label>
-              <Input type="number" value={params.contribution0} onChange={(e) => setParams({ ...params, contribution0: Number(e.target.value || 0) })} />
-              <Label>Contribution Growth per Year: {(params.contributionGrowth * 100).toFixed(1)}%</Label>
-              <Slider value={[Math.round(params.contributionGrowth * 1000)]} min={0} max={100} step={1} onValueChange={([v]) => setParams({ ...params, contributionGrowth: v / 1000 })} />
-            </div>
-            <div className="space-y-2">
-              <Label>Toggle: Spend From Stocks Only</Label>
-              <Checkbox checked={params.spendFromStocks} onCheckedChange={(v) => setParams({ ...params, spendFromStocks: Boolean(v) })} />
-            </div>
-            <div className="space-y-2">
-              <Label>Inflation-Adjusted View (today’s dollars)</Label>
-              <Checkbox checked={realDollars} onCheckedChange={(v) => setRealDollars(Boolean(v))} />
-            </div>
-            <div className="flex gap-2 pt-2">
-              <Button variant="secondary" onClick={reset}>
-                <RefreshCcw className="w-4 h-4 mr-2" /> Reset
+            <Accordion type="single" collapsible className="pt-2">
+              <AccordionItem value="returns">
+                <AccordionTrigger className="text-base font-semibold">Return & Inflation Assumptions</AccordionTrigger>
+                <AccordionContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Inflation</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={(params.inflation * 100).toFixed(1)}
+                        onChange={(e) => setParams({ ...params, inflation: Number(e.target.value) / 100 })}
+                      />
+                      <div className="flex items-center gap-2 pt-1">
+                        <Checkbox checked={realDollars} onCheckedChange={(v) => setRealDollars(Boolean(v))} />
+                        <Label className="m-0 text-sm">Inflation-Adjusted View (today’s dollars)</Label>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Cash Yield</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={(params.cashReturn * 100).toFixed(1)}
+                        onChange={(e) => setParams({ ...params, cashReturn: Number(e.target.value) / 100 })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Real Estate Return (%)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={(params.realEstateReturn * 100).toFixed(1)}
+                        onChange={(e) => setParams({ ...params, realEstateReturn: Number(e.target.value) / 100 })}
+                      />
+                    </div>
+                    {!params.useGlidepath && (
+                      <div className="space-y-2">
+                        <Label>Fixed Stock Return (%)</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          value={(params.stockReturn * 100).toFixed(1)}
+                          onChange={(e) => setParams({ ...params, stockReturn: Number(e.target.value) / 100 })}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+            <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:items-center">
+              <Button onClick={handleSave}>
+                <Link2 className="w-4 h-4 mr-2" />
+                {copyStatus === "copied" ? "Link Copied" : copyStatus === "error" ? "Copy Failed - Try Again" : "Save Scenario"}
               </Button>
+              {copyStatus === "copied" && (
+                <span className="text-sm text-muted-foreground" aria-live="polite">
+                  Link copied to clipboard.
+                </span>
+              )}
+              {copyStatus === "error" && (
+                <span className="text-sm text-destructive" aria-live="polite">
+                  Could not copy link. Please try again.
+                </span>
+              )}
             </div>
           </div>
           <div className="space-y-4">
-            <h2 className="font-semibold">Return & Inflation Assumptions</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>Cash Yield</Label>
-                <Input type="number" step="0.1" value={(params.cashReturn * 100).toFixed(1)} onChange={(e) => setParams({ ...params, cashReturn: Number(e.target.value) / 100 })} />
-              </div>
-              <div>
-                <Label>Inflation</Label>
-                <Input type="number" step="0.1" value={(params.inflation * 100).toFixed(1)} onChange={(e) => setParams({ ...params, inflation: Number(e.target.value) / 100 })} />
-              </div>
-            </div>
-            <h2 className="font-semibold pt-2">Starting Balances</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>Cash</Label>
-                <Input type="number" value={params.cash0} onChange={(e) => setParams({ ...params, cash0: Number(e.target.value || 0) })} />
-              </div>
-            </div>
             <Accordion type="multiple" className="pt-4">
+              <AccordionItem value="starting-balances">
+                <AccordionTrigger className="text-base font-semibold">Starting Balances</AccordionTrigger>
+                <AccordionContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label>Starting Cash</Label>
+                      <Input type="number" value={params.cash0} onChange={(e) => setParams({ ...params, cash0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Starting Equity (Stocks)</Label>
+                      <Input type="number" value={params.stocks0} onChange={(e) => setParams({ ...params, stocks0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Real Estate Value</Label>
+                      <Input type="number" value={params.realEstate0} onChange={(e) => setParams({ ...params, realEstate0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Mortgage principal outstanding</Label>
+                      <Input type="number" value={params.mortgage0} onChange={(e) => setParams({ ...params, mortgage0: Number(e.target.value || 0) })} />
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="cash">
+                <AccordionTrigger className="text-base font-semibold">Cash</AccordionTrigger>
+                <AccordionContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label>Starting Cash</Label>
+                      <Input type="number" value={params.cash0} onChange={(e) => setParams({ ...params, cash0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div>
+                      <Label>Cash Yield</Label>
+                      <Input type="number" step="0.1" value={(params.cashReturn * 100).toFixed(1)} onChange={(e) => setParams({ ...params, cashReturn: Number(e.target.value) / 100 })} />
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
               <AccordionItem value="equity">
                 <AccordionTrigger className="text-base font-semibold">Equity</AccordionTrigger>
                 <AccordionContent>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="col-span-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
                       <Label>Starting Equity (Stocks)</Label>
                       <Input type="number" value={params.stocks0} onChange={(e) => setParams({ ...params, stocks0: Number(e.target.value || 0) })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Annual Contribution</Label>
+                      <Input type="number" value={params.contribution0} onChange={(e) => setParams({ ...params, contribution0: Number(e.target.value || 0) })} />
+                      <Label>Contribution Growth per Year: {(params.contributionGrowth * 100).toFixed(1)}%</Label>
+                      <Slider value={[Math.round(params.contributionGrowth * 1000)]} min={0} max={100} step={1} onValueChange={([v]) => setParams({ ...params, contributionGrowth: v / 1000 })} />
                     </div>
                     <div className="col-span-2 flex items-center gap-2 pt-2">
                       <Checkbox checked={params.useGlidepath} onCheckedChange={(v) => setParams({ ...params, useGlidepath: Boolean(v) })} />
                       <Label className="m-0">Use Glidepath for Equity Returns</Label>
                     </div>
-                    <div className="col-span-2 grid grid-cols-2 md:grid-cols-3 gap-4">
-                      <div>
-                        <Label>{`Retirement age (${params.retirementAge}) − 20 =`}</Label>
-                        <Input type="number" step="0.1" value={(params.gpRetMinus20 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus20: Number(e.target.value) / 100 })} />
+                    {params.useGlidepath ? (
+                      <div className="col-span-2 grid grid-cols-2 md:grid-cols-3 gap-4">
+                        <div>
+                          <Label>{`Retirement age (${params.retirementAge}) − 20 =`}</Label>
+                          <Input type="number" step="0.1" value={(params.gpRetMinus20 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus20: Number(e.target.value) / 100 })} />
+                        </div>
+                        <div>
+                          <Label>{`Retirement age (${params.retirementAge}) − 10 =`}</Label>
+                          <Input type="number" step="0.1" value={(params.gpRetMinus10 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus10: Number(e.target.value) / 100 })} />
+                        </div>
+                        <div>
+                          <Label>{`Retirement age (${params.retirementAge}) − 5 =`}</Label>
+                          <Input type="number" step="0.1" value={(params.gpRetMinus5 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus5: Number(e.target.value) / 100 })} />
+                        </div>
+                        <div>
+                          <Label>{`Post-retirement (${params.retirementAge}) =`}</Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={(params.gpPostRet * 100).toFixed(1)}
+                            onChange={(e) => {
+                              const value = Number(e.target.value) / 100;
+                              setParams({ ...params, gpPostRet: value, gpRet0: value });
+                            }}
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <Label>{`Retirement age (${params.retirementAge}) − 10 =`}</Label>
-                        <Input type="number" step="0.1" value={(params.gpRetMinus10 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus10: Number(e.target.value) / 100 })} />
+                    ) : (
+                      <div className="col-span-2">
+                        <Label>Fixed Stock Return (%)</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          value={(params.stockReturn * 100).toFixed(1)}
+                          onChange={(e) => setParams({ ...params, stockReturn: Number(e.target.value) / 100 })}
+                        />
                       </div>
-                      <div>
-                        <Label>{`Retirement age (${params.retirementAge}) − 5 =`}</Label>
-                        <Input type="number" step="0.1" value={(params.gpRetMinus5 * 100).toFixed(1)} onChange={(e) => setParams({ ...params, gpRetMinus5: Number(e.target.value) / 100 })} />
-                      </div>
-                      <div>
-                        <Label>{`Post-retirement (${params.retirementAge}) =`}</Label>
-                        <Input type="number" step="0.1" value={(params.gpPostRet * 100).toFixed(1)} onChange={(e) => {
-                          const value = Number(e.target.value) / 100;
-                          setParams({ ...params, gpPostRet: value, gpRet0: value });
-                        }} />
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="real-estate">
                 <AccordionTrigger className="text-base font-semibold">Real Estate</AccordionTrigger>
                 <AccordionContent>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <Label>Real Estate Value</Label>
                       <Input type="number" value={params.realEstate0} onChange={(e) => setParams({ ...params, realEstate0: Number(e.target.value || 0) })} />
@@ -530,23 +672,6 @@ export default function App() {
           </div>
         </CardContent>
       </Card>
-
-      <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-end">
-        <Button onClick={handleSave}>
-          <Link2 className="w-4 h-4 mr-2" />
-          {copyStatus === "copied" ? "Link Copied" : copyStatus === "error" ? "Copy Failed - Try Again" : "Save Scenario"}
-        </Button>
-        {copyStatus === "copied" && (
-          <span className="text-sm text-muted-foreground" aria-live="polite">
-            Link copied to clipboard.
-          </span>
-        )}
-        {copyStatus === "error" && (
-          <span className="text-sm text-destructive" aria-live="polite">
-            Could not copy link. Please try again.
-          </span>
-        )}
-      </div>
     </div>
   );
 }

@@ -7,3 +7,4 @@ npm-debug.log*
 *.tsbuildinfo
 
 out
+.gh-pages-worktree
