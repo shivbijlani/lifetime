@@ -226,12 +226,13 @@ export default function App() {
         <span className="text-base font-normal text-muted-foreground">{SITE_TAGLINE}</span>
       </h1>
       <p className="text-sm opacity-80">
-        Adjust assumptions and see your year-by-year outlook through retirement, with options to view everything in
-        today’s dollars.
+        Explore your lifetime finances, modeled privately on your device — no logins, no servers. Move the sliders, add
+        life events, and see how your plan holds up.
       </p>
       <Card className="shadow-md">
-        <CardContent className="p-4 grid md:grid-cols-2 gap-6">
-          <div className="space-y-4">
+        <CardContent className="p-4 space-y-6">
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="space-y-4">
             <h2 className="font-semibold">Timeline</h2>
             <div className="space-y-2">
               <Label>Retirement Age: {params.retirementAge}</Label>
@@ -341,22 +342,6 @@ export default function App() {
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
-            <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:items-center">
-              <Button onClick={handleSave}>
-                <Link2 className="w-4 h-4 mr-2" />
-                {copyStatus === "copied" ? "Link Copied" : copyStatus === "error" ? "Copy Failed - Try Again" : "Save Scenario"}
-              </Button>
-              {copyStatus === "copied" && (
-                <span className="text-sm text-muted-foreground" aria-live="polite">
-                  Link copied to clipboard.
-                </span>
-              )}
-              {copyStatus === "error" && (
-                <span className="text-sm text-destructive" aria-live="polite">
-                  Could not copy link. Please try again.
-                </span>
-              )}
-            </div>
           </div>
           <div className="space-y-4">
             <Accordion type="multiple" className="pt-4">
@@ -578,6 +563,26 @@ export default function App() {
               </AccordionItem>
             </Accordion>
           </div>
+        </div>
+        <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <Button onClick={handleSave}>
+            <Link2 className="w-4 h-4 mr-2" />
+            {copyStatus === "copied" ? "Link Copied" : copyStatus === "error" ? "Copy Failed - Try Again" : "Save Scenario"}
+          </Button>
+          {copyStatus === "copied" && (
+            <span className="text-sm text-muted-foreground" aria-live="polite">
+              Link copied to clipboard.
+            </span>
+          )}
+          {copyStatus === "error" && (
+            <span className="text-sm text-destructive" aria-live="polite">
+              Could not copy link. Please try again.
+            </span>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Tip: The link we create contains your data — copy or bookmark it to save your work.
+          </p>
+        </div>
         </CardContent>
       </Card>
 
