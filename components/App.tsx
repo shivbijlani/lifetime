@@ -7,11 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Info, Link2 } from "lucide-react";
+import { Info, Link2, Plus, Trash2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { useSearchParams } from "next/navigation";
-import { defaultParams, deriveParamsFromQuery, type ScenarioParams } from "@/lib/scenario";
+import {
+  defaultParams,
+  deriveParamsFromQuery,
+  type ScenarioParams,
+  type ElderCareSupport,
+  type ChildSupport,
+} from "@/lib/scenario";
 import { SITE_TAGLINE, SITE_TITLE } from "@/lib/branding";
 
 type Row = {
@@ -77,10 +83,16 @@ function computeModel(p: Params) {
         mortgage -= principal;
       }
     }
-    let parents = 0;
-    if (year >= p.parentStart && year <= p.parentEndYear) parents = 10_000 + p.parentInc * (year - p.parentStart);
-    let kids = 0;
-    for (const ks of p.kidsStarts) if (year >= ks && year < ks + p.kidsYears) kids += p.kidsAnnual;
+    const parents = p.elderCare.reduce((total, support) => {
+      if (year < support.startYear || year > support.endYear) return total;
+      const yearsSinceStart = year - support.startYear;
+      const amount = support.firstYearAmount + support.annualIncrease * yearsSinceStart;
+      return total + Math.max(0, amount);
+    }, 0);
+    const kids = p.childSupports.reduce((total, support) => {
+      if (year < support.startYear || year >= support.startYear + support.years) return total;
+      return total + Math.max(0, support.annualAmount);
+    }, 0);
     const incomeFunded = baseAnnual + mortAnnual + vacAnnual + upgrades;
     const totalExpenses = incomeFunded + parents + kids;
     const income = working ? incomeFunded : 0;
@@ -233,11 +245,10 @@ export default function App() {
         <CardContent className="p-4 space-y-6">
           <div className="grid md:grid-cols-2 gap-6">
             <div className="space-y-4">
-            <h2 className="font-semibold">Timeline</h2>
-            <div className="space-y-2">
-              <Label>Retirement Age: {params.retirementAge}</Label>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
+                <h2 className="font-semibold m-0">Timeline for age</h2>
                 <Input
+                  aria-label="Current age"
                   type="number"
                   className="w-24"
                   min={18}
@@ -265,8 +276,11 @@ export default function App() {
                     })
                   }
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>Retirement Age: {params.retirementAge}</Label>
                 <Slider
-                  className="flex-1"
+                  className="w-full"
                   value={[params.retirementAge]}
                   min={params.currentAge}
                   max={70}
@@ -283,65 +297,64 @@ export default function App() {
                   }
                 />
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Projection End Age: {params.maxAge}</Label>
-              <Slider value={[params.maxAge]} min={70} max={100} step={10} onValueChange={([v]) => setParams({ ...params, maxAge: v })} />
-              <div className="text-xs text-muted-foreground">
-                Current age: {params.currentAge} · Start year: {params.startYear} · End year: {projectionEndYear}
+              <div className="space-y-2">
+                <Label>Projection End Age: {params.maxAge}</Label>
+                <Slider value={[params.maxAge]} min={70} max={100} step={10} onValueChange={([v]) => setParams({ ...params, maxAge: v })} />
+                <div className="text-xs text-muted-foreground">
+                  Current age: {params.currentAge} · Start year: {params.startYear} · End year: {projectionEndYear}
+                </div>
               </div>
-            </div>
-            <Accordion type="single" collapsible className="pt-2">
-              <AccordionItem value="returns">
-                <AccordionTrigger className="text-base font-semibold">Return & Inflation Assumptions</AccordionTrigger>
-                <AccordionContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Inflation</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={(params.inflation * 100).toFixed(1)}
-                        onChange={(e) => setParams({ ...params, inflation: Number(e.target.value) / 100 })}
-                      />
-                      <div className="flex items-center gap-2 pt-1">
-                        <Checkbox checked={realDollars} onCheckedChange={(v) => setRealDollars(Boolean(v))} />
-                        <Label className="m-0 text-sm">Inflation-Adjusted View (today’s dollars)</Label>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Cash Yield</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={(params.cashReturn * 100).toFixed(1)}
-                        onChange={(e) => setParams({ ...params, cashReturn: Number(e.target.value) / 100 })}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Real Estate Return (%)</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={(params.realEstateReturn * 100).toFixed(1)}
-                        onChange={(e) => setParams({ ...params, realEstateReturn: Number(e.target.value) / 100 })}
-                      />
-                    </div>
-                    {!params.useGlidepath && (
+              <Accordion type="single" collapsible className="pt-2">
+                <AccordionItem value="returns">
+                  <AccordionTrigger className="text-base font-semibold">Return & Inflation Assumptions</AccordionTrigger>
+                  <AccordionContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Fixed Stock Return (%)</Label>
+                        <Label>Inflation</Label>
                         <Input
                           type="number"
                           step="0.1"
-                          value={(params.stockReturn * 100).toFixed(1)}
-                          onChange={(e) => setParams({ ...params, stockReturn: Number(e.target.value) / 100 })}
+                          value={(params.inflation * 100).toFixed(1)}
+                          onChange={(e) => setParams({ ...params, inflation: Number(e.target.value) / 100 })}
+                        />
+                        <div className="flex items-center gap-2 pt-1">
+                          <Checkbox checked={realDollars} onCheckedChange={(v) => setRealDollars(Boolean(v))} />
+                          <Label className="m-0 text-sm">Inflation-Adjusted View (today’s dollars)</Label>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Cash Yield</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          value={(params.cashReturn * 100).toFixed(1)}
+                          onChange={(e) => setParams({ ...params, cashReturn: Number(e.target.value) / 100 })}
                         />
                       </div>
-                    )}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
+                      <div className="space-y-2">
+                        <Label>Real Estate Return (%)</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          value={(params.realEstateReturn * 100).toFixed(1)}
+                          onChange={(e) => setParams({ ...params, realEstateReturn: Number(e.target.value) / 100 })}
+                        />
+                      </div>
+                      {!params.useGlidepath && (
+                        <div className="space-y-2">
+                          <Label>Fixed Stock Return (%)</Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={(params.stockReturn * 100).toFixed(1)}
+                            onChange={(e) => setParams({ ...params, stockReturn: Number(e.target.value) / 100 })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
           </div>
           <div className="space-y-4">
             <Accordion type="multiple" className="pt-4">

@@ -1,5 +1,18 @@
 import type { ReadonlyURLSearchParams } from "next/navigation";
 
+export type ElderCareSupport = {
+  startYear: number;
+  endYear: number;
+  firstYearAmount: number;
+  annualIncrease: number;
+};
+
+export type ChildSupport = {
+  startYear: number;
+  years: number;
+  annualAmount: number;
+};
+
 export type ScenarioParams = {
   startYear: number;
   currentAge: number;
@@ -21,12 +34,9 @@ export type ScenarioParams = {
   baseMonthly: number;
   vacationMonthly: number;
   homeUpgradesAnnual: number;
-  parentStart: number;
-  parentInc: number;
-  parentEndYear: number;
+  elderCare: ElderCareSupport[];
+  childSupports: ChildSupport[];
   kidsStarts: number[];
-  kidsYears: number;
-  kidsAnnual: number;
   contribution0: number;
   contributionGrowth: number;
   spendFromStocks: boolean;
@@ -63,8 +73,8 @@ export function deriveParamsFromQuery(searchParams: ReadonlyURLSearchParams | nu
   if (!payload.params || typeof payload.params !== "object") return base;
   const overrides = Object.fromEntries(
     Object.entries(payload.params).filter(([, value]) => value !== undefined),
-  ) as Partial<ScenarioParams>;
-  return { ...base, ...overrides };
+  ) as Record<string, unknown>;
+  return mergeScenarioOverrides(base, overrides);
 }
 
 function parseScenarioPayload(raw: string): ScenarioPayload | null {
@@ -124,16 +134,6 @@ function generateSmartDefaults(): ScenarioParams {
   const vacationMonthly = randomRounded(rng, 900, 1_400, 50);
   const homeUpgradesAnnual = randomRounded(rng, 10_000, 18_000, 1_000);
 
-  const parentStart = startYear + randomInt(rng, 1, 3);
-  const parentInc = randomRounded(rng, 1_000, 1_800, 100);
-  const parentEndYear = parentStart + randomInt(rng, 8, 12);
-
-  const kidsStarts = Array.from({ length: 3 }, (_, idx) => startYear + 3 + randomInt(rng, idx * 2, idx * 2 + 3)).sort(
-    (a, b) => a - b,
-  );
-  const kidsYears = 4;
-  const kidsAnnual = randomRounded(rng, 8_000, 12_000, 500);
-
   const contribution0 = randomRounded(rng, 40_000, 70_000, 2_500);
   const contributionGrowth = randomRounded(rng, 0.025, 0.04, 0.0005);
 
@@ -158,12 +158,9 @@ function generateSmartDefaults(): ScenarioParams {
     baseMonthly,
     vacationMonthly,
     homeUpgradesAnnual,
-    parentStart,
-    parentInc,
-    parentEndYear,
-    kidsStarts,
-    kidsYears,
-    kidsAnnual,
+    elderCare: [],
+    childSupports: [],
+    kidsStarts: [],
     contribution0,
     contributionGrowth,
     spendFromStocks: true,
@@ -174,6 +171,166 @@ function generateSmartDefaults(): ScenarioParams {
     gpRet0: 0.05,
     gpPostRet: 0.04,
   };
+}
+
+const LEGACY_PARENT_FIRST_YEAR_AMOUNT = 10_000;
+
+function mergeScenarioOverrides(base: ScenarioParams, overridesRaw: Record<string, unknown>): ScenarioParams {
+  const result: ScenarioParams = {
+    ...base,
+    elderCare: base.elderCare.slice(),
+    childSupports: base.childSupports.slice(),
+    kidsStarts: base.kidsStarts.slice(),
+  };
+
+  const knownKeys = new Set(Object.keys(base));
+  let elderCareExplicit = false;
+  let childSupportsExplicit = false;
+  let kidsStartsExplicit = false;
+
+  if (Object.prototype.hasOwnProperty.call(overridesRaw, "elderCare")) {
+    const parsed = sanitizeElderCareSupports(overridesRaw["elderCare"]);
+    result.elderCare = parsed;
+    elderCareExplicit = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(overridesRaw, "childSupports")) {
+    const parsed = sanitizeChildSupports(overridesRaw["childSupports"]);
+    result.childSupports = parsed;
+    childSupportsExplicit = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(overridesRaw, "kidsStarts")) {
+    const parsed = sanitizeKidsStarts(overridesRaw["kidsStarts"]);
+    result.kidsStarts = parsed;
+    kidsStartsExplicit = true;
+  }
+
+  for (const key of knownKeys) {
+    if (key === "elderCare" || key === "childSupports" || key === "kidsStarts") continue;
+    if (Object.prototype.hasOwnProperty.call(overridesRaw, key)) {
+      (result as Record<string, unknown>)[key] = overridesRaw[key];
+    }
+  }
+
+  if (!elderCareExplicit) {
+    const legacy = extractLegacyElderCare(overridesRaw);
+    if (legacy.length > 0) {
+      result.elderCare = legacy;
+    }
+  }
+
+  if (!childSupportsExplicit) {
+    const legacy = extractLegacyChildSupports(overridesRaw);
+    if (legacy.supports.length > 0) {
+      result.childSupports = legacy.supports;
+    }
+    if (!kidsStartsExplicit && legacy.starts.length > 0) {
+      result.kidsStarts = legacy.starts;
+    }
+  }
+
+  return result;
+}
+
+function sanitizeElderCareSupports(input: unknown): ElderCareSupport[] {
+  if (!Array.isArray(input)) return [];
+  const supports: ElderCareSupport[] = [];
+  for (const entry of input) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Record<string, unknown>;
+    const startYear = asNumber(candidate.startYear);
+    const endYear = asNumber(candidate.endYear ?? candidate.stopYear ?? candidate.finishYear ?? candidate.startYear);
+    const firstYearAmount = asNumber(candidate.firstYearAmount ?? candidate.amount ?? candidate.baseAnnual);
+    const annualIncrease = asNumber(candidate.annualIncrease ?? candidate.increase ?? 0) ?? 0;
+    if (startYear === null || endYear === null || endYear < startYear || firstYearAmount === null || firstYearAmount <= 0)
+      continue;
+    supports.push({
+      startYear,
+      endYear,
+      firstYearAmount,
+      annualIncrease,
+    });
+  }
+  return supports;
+}
+
+function sanitizeChildSupports(input: unknown): ChildSupport[] {
+  if (!Array.isArray(input)) return [];
+  const supports: ChildSupport[] = [];
+  for (const entry of input) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Record<string, unknown>;
+    const startYear = asNumber(candidate.startYear);
+    const years = asNumber(candidate.years ?? candidate.duration ?? candidate.length);
+    const annualAmount = asNumber(candidate.annualAmount ?? candidate.amount);
+    if (startYear === null || annualAmount === null || annualAmount <= 0 || years === null || years <= 0) continue;
+    const duration = years;
+    supports.push({
+      startYear,
+      years: duration,
+      annualAmount,
+    });
+  }
+  return supports;
+}
+
+function sanitizeKidsStarts(input: unknown): number[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((value) => asNumber(value))
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
+}
+
+function extractLegacyElderCare(overridesRaw: Record<string, unknown>): ElderCareSupport[] {
+  const startYear = asNumber(overridesRaw["parentStart"]);
+  const endYear = asNumber(overridesRaw["parentEndYear"]);
+  if (startYear === null || endYear === null) return [];
+  const firstYearAmount =
+    asNumber(overridesRaw["parentBaseAnnual"] ?? overridesRaw["parentAnnual"]) ?? LEGACY_PARENT_FIRST_YEAR_AMOUNT;
+  if (firstYearAmount <= 0) return [];
+  const inc = asNumber(overridesRaw["parentInc"]) ?? 0;
+  return [
+    {
+      startYear,
+      endYear,
+      firstYearAmount,
+      annualIncrease: inc,
+    },
+  ];
+}
+
+function extractLegacyChildSupports(overridesRaw: Record<string, unknown>): { supports: ChildSupport[]; starts: number[] } {
+  const rawStarts = overridesRaw["kidsStarts"];
+  const annualAmount = asNumber(overridesRaw["kidsAnnual"]);
+  const years = asNumber(overridesRaw["kidsYears"]);
+  if (!Array.isArray(rawStarts) || annualAmount === null || annualAmount <= 0 || years === null || years <= 0) {
+    return { supports: [], starts: [] };
+  }
+  const sanitizedStarts = rawStarts
+    .map((value) => asNumber(value))
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
+  return {
+    starts: sanitizedStarts,
+    supports: sanitizedStarts.map((startYear) => ({
+      startYear,
+      years,
+      annualAmount,
+    })),
+  };
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return null;
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 function createDeterministicRng(seed: number): () => number {
