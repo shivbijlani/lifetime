@@ -1,16 +1,27 @@
 import type { ReadonlyURLSearchParams } from "next/navigation";
 
-export type ElderCareSupport = {
+export type SupportCategory = "elderCare" | "childSupport";
+export type SupportModelType = "flat" | "linear";
+
+export type SupportPlan = {
+  name: string;
+  category: SupportCategory;
   startYear: number;
   endYear: number;
-  firstYearAmount: number;
+  annualAmount: number;
+  model: SupportModelType;
   annualIncrease: number;
 };
 
-export type ChildSupport = {
+export type MortgagePlan = {
+  name: string;
+  principal: number;
+  rate: number;
+  paymentMonthly: number;
   startYear: number;
-  years: number;
-  annualAmount: number;
+  startMonth: number;
+  endYear: number;
+  endMonth: number;
 };
 
 export type ScenarioParams = {
@@ -22,11 +33,7 @@ export type ScenarioParams = {
   stocks0: number;
   cash0: number;
   realEstate0: number;
-  mortgage0: number;
-  mortgageRate: number;
-  mortgagePaymentMonthly: number;
-  mortgageEndYear: number;
-  mortgageEndMonth: number;
+  mortgages: MortgagePlan[];
   stockReturn: number;
   cashReturn: number;
   realEstateReturn: number;
@@ -34,9 +41,7 @@ export type ScenarioParams = {
   baseMonthly: number;
   vacationMonthly: number;
   homeUpgradesAnnual: number;
-  elderCare: ElderCareSupport[];
-  childSupports: ChildSupport[];
-  kidsStarts: number[];
+  supports: SupportPlan[];
   contribution0: number;
   contributionGrowth: number;
   spendFromStocks: boolean;
@@ -118,12 +123,12 @@ function generateSmartDefaults(): ScenarioParams {
   const cash0 = randomRounded(rng, 120_000, 260_000, 10_000);
   const realEstate0 = randomRounded(rng, 850_000, 1_350_000, 25_000);
 
-  const mortgage0 = randomRounded(rng, Math.round(realEstate0 * 0.35), Math.round(realEstate0 * 0.6), 10_000);
+  const mortgagePrincipal = randomRounded(rng, Math.round(realEstate0 * 0.35), Math.round(realEstate0 * 0.6), 10_000);
   const mortgageRate = randomRounded(rng, 0.0375, 0.055, 0.0005);
   const mortgageTermYears = randomInt(rng, 15, 25);
   const mortgageEndYear = startYear + mortgageTermYears;
   const mortgageEndMonth = randomInt(rng, 1, 12);
-  const mortgagePaymentMonthly = calculateMortgagePayment(mortgage0, mortgageRate, mortgageTermYears);
+  const mortgagePaymentMonthly = calculateMortgagePayment(mortgagePrincipal, mortgageRate, mortgageTermYears);
 
   const stockReturn = 0.07;
   const cashReturn = 0.02;
@@ -137,6 +142,19 @@ function generateSmartDefaults(): ScenarioParams {
   const contribution0 = randomRounded(rng, 40_000, 70_000, 2_500);
   const contributionGrowth = randomRounded(rng, 0.025, 0.04, 0.0005);
 
+  const mortgages = assignMortgageNames([
+    {
+      name: "Mortgage 1",
+      principal: mortgagePrincipal,
+      rate: mortgageRate,
+      paymentMonthly: mortgagePaymentMonthly,
+      startYear,
+      startMonth: 1,
+      endYear: mortgageEndYear,
+      endMonth: mortgageEndMonth,
+    },
+  ]);
+
   return {
     startYear,
     currentAge,
@@ -146,11 +164,7 @@ function generateSmartDefaults(): ScenarioParams {
     stocks0,
     cash0,
     realEstate0,
-    mortgage0,
-    mortgageRate,
-    mortgagePaymentMonthly,
-    mortgageEndYear,
-    mortgageEndMonth,
+    mortgages,
     stockReturn,
     cashReturn,
     realEstateReturn,
@@ -158,9 +172,7 @@ function generateSmartDefaults(): ScenarioParams {
     baseMonthly,
     vacationMonthly,
     homeUpgradesAnnual,
-    elderCare: [],
-    childSupports: [],
-    kidsStarts: [],
+    supports: [],
     contribution0,
     contributionGrowth,
     spendFromStocks: true,
@@ -178,148 +190,247 @@ const LEGACY_PARENT_FIRST_YEAR_AMOUNT = 10_000;
 function mergeScenarioOverrides(base: ScenarioParams, overridesRaw: Record<string, unknown>): ScenarioParams {
   const result: ScenarioParams = {
     ...base,
-    elderCare: base.elderCare.slice(),
-    childSupports: base.childSupports.slice(),
-    kidsStarts: base.kidsStarts.slice(),
+    supports: base.supports.map((support) => ({ ...support })),
+    mortgages: base.mortgages.map((mortgage) => ({ ...mortgage })),
   };
 
   const knownKeys = new Set(Object.keys(base));
-  let elderCareExplicit = false;
-  let childSupportsExplicit = false;
-  let kidsStartsExplicit = false;
+  let supportsExplicit = false;
+  let mortgagesExplicit = false;
 
-  if (Object.prototype.hasOwnProperty.call(overridesRaw, "elderCare")) {
-    const parsed = sanitizeElderCareSupports(overridesRaw["elderCare"]);
-    result.elderCare = parsed;
-    elderCareExplicit = true;
+  if (Object.prototype.hasOwnProperty.call(overridesRaw, "supports")) {
+    const parsed = sanitizeSupportPlans(overridesRaw["supports"]);
+    result.supports = assignSupportNames(parsed);
+    supportsExplicit = true;
   }
 
-  if (Object.prototype.hasOwnProperty.call(overridesRaw, "childSupports")) {
-    const parsed = sanitizeChildSupports(overridesRaw["childSupports"]);
-    result.childSupports = parsed;
-    childSupportsExplicit = true;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(overridesRaw, "kidsStarts")) {
-    const parsed = sanitizeKidsStarts(overridesRaw["kidsStarts"]);
-    result.kidsStarts = parsed;
-    kidsStartsExplicit = true;
+  if (Object.prototype.hasOwnProperty.call(overridesRaw, "mortgages")) {
+    const parsed = sanitizeMortgagePlans(overridesRaw["mortgages"], base.startYear);
+    result.mortgages = assignMortgageNames(parsed);
+    mortgagesExplicit = true;
   }
 
   for (const key of knownKeys) {
-    if (key === "elderCare" || key === "childSupports" || key === "kidsStarts") continue;
+    if (key === "supports" || key === "mortgages") continue;
     if (Object.prototype.hasOwnProperty.call(overridesRaw, key)) {
       (result as Record<string, unknown>)[key] = overridesRaw[key];
     }
   }
 
-  if (!elderCareExplicit) {
-    const legacy = extractLegacyElderCare(overridesRaw);
-    if (legacy.length > 0) {
-      result.elderCare = legacy;
+  if (!supportsExplicit) {
+    const legacySupports = [
+      ...convertLegacyParentFields(overridesRaw),
+      ...convertLegacyChildFields(overridesRaw),
+      ...convertIntermediateElderCare(overridesRaw["elderCare"]),
+      ...convertIntermediateChildSupports(overridesRaw["childSupports"]),
+    ];
+    if (legacySupports.length > 0) {
+      result.supports = assignSupportNames(legacySupports);
     }
   }
 
-  if (!childSupportsExplicit) {
-    const legacy = extractLegacyChildSupports(overridesRaw);
-    if (legacy.supports.length > 0) {
-      result.childSupports = legacy.supports;
-    }
-    if (!kidsStartsExplicit && legacy.starts.length > 0) {
-      result.kidsStarts = legacy.starts;
+  if (!mortgagesExplicit) {
+    const legacyMortgages = convertLegacyMortgageFields(overridesRaw, base);
+    if (legacyMortgages.length > 0) {
+      result.mortgages = assignMortgageNames(legacyMortgages);
     }
   }
 
   return result;
 }
 
-function sanitizeElderCareSupports(input: unknown): ElderCareSupport[] {
+function sanitizeSupportPlans(input: unknown): SupportPlan[] {
   if (!Array.isArray(input)) return [];
-  const supports: ElderCareSupport[] = [];
+  const supports: SupportPlan[] = [];
   for (const entry of input) {
     if (!entry || typeof entry !== "object") continue;
     const candidate = entry as Record<string, unknown>;
     const startYear = asNumber(candidate.startYear);
-    const endYear = asNumber(candidate.endYear ?? candidate.stopYear ?? candidate.finishYear ?? candidate.startYear);
-    const firstYearAmount = asNumber(candidate.firstYearAmount ?? candidate.amount ?? candidate.baseAnnual);
-    const annualIncrease = asNumber(candidate.annualIncrease ?? candidate.increase ?? 0) ?? 0;
-    if (startYear === null || endYear === null || endYear < startYear || firstYearAmount === null || firstYearAmount <= 0)
+    const endYear =
+      asNumber(candidate.endYear ?? candidate.stopYear ?? candidate.finishYear) ?? (startYear !== null ? startYear : null);
+    const annualAmount = asNumber(candidate.annualAmount ?? candidate.amount ?? candidate.firstYearAmount);
+    if (startYear === null || endYear === null || endYear < startYear || annualAmount === null || annualAmount <= 0)
       continue;
+    const model = normalizeSupportModel(candidate.model ?? candidate.rateModelType);
+    const annualIncreaseRaw =
+      asNumber(candidate.annualIncrease ?? candidate.increase ?? candidate.rate ?? candidate.growth ?? 0) ?? 0;
+    const name =
+      typeof candidate.name === "string" && candidate.name.trim().length > 0
+        ? candidate.name.trim()
+        : model === "linear"
+        ? "Support Plan (Linear)"
+        : "Support Plan (Flat)";
     supports.push({
+      name,
+      category: normalizeSupportCategory(candidate.category ?? candidate.type ?? candidate.kind ?? name, name),
       startYear,
       endYear,
-      firstYearAmount,
-      annualIncrease,
+      annualAmount,
+      model,
+      annualIncrease: model === "linear" ? annualIncreaseRaw : 0,
     });
   }
   return supports;
 }
 
-function sanitizeChildSupports(input: unknown): ChildSupport[] {
+function sanitizeMortgagePlans(input: unknown, defaultStartYear: number): MortgagePlan[] {
   if (!Array.isArray(input)) return [];
-  const supports: ChildSupport[] = [];
+  const mortgages: MortgagePlan[] = [];
   for (const entry of input) {
     if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Record<string, unknown>;
+    const principal = asNumber(candidate.principal ?? candidate.balance ?? candidate.amount ?? candidate.mortgage0);
+    const rate = asNumber(candidate.rate ?? candidate.mortgageRate);
+    const paymentMonthly = asNumber(candidate.paymentMonthly ?? candidate.payment ?? candidate.monthlyPayment);
+    const startYear = asNumber(candidate.startYear) ?? defaultStartYear;
+    const startMonth = clampMonthNumber(asNumber(candidate.startMonth), 1);
+    const endYear = asNumber(candidate.endYear);
+    const endMonth = clampMonthNumber(asNumber(candidate.endMonth ?? candidate.endMonthIndex ?? candidate.monthEnd), 12);
+    if (
+      principal === null ||
+      principal <= 0 ||
+      rate === null ||
+      rate < 0 ||
+      paymentMonthly === null ||
+      paymentMonthly <= 0 ||
+      endYear === null ||
+      endYear < startYear
+    ) {
+      continue;
+    }
+    mortgages.push({
+      name: typeof candidate.name === "string" ? candidate.name : "",
+      principal,
+      rate,
+      paymentMonthly,
+      startYear,
+      startMonth,
+      endYear,
+      endMonth,
+    });
+  }
+  return mortgages;
+}
+
+function convertLegacyParentFields(overridesRaw: Record<string, unknown>): SupportPlan[] {
+  const startYear = asNumber(overridesRaw["parentStart"]);
+  const endYear = asNumber(overridesRaw["parentEndYear"]);
+  if (startYear === null || endYear === null || endYear < startYear) return [];
+  const annualAmount =
+    asNumber(overridesRaw["parentBaseAnnual"] ?? overridesRaw["parentAnnual"]) ?? LEGACY_PARENT_FIRST_YEAR_AMOUNT;
+  if (annualAmount <= 0) return [];
+  const annualIncrease = asNumber(overridesRaw["parentInc"]) ?? 0;
+  return assignSupportNames([
+    {
+      name: "Parent",
+      category: "elderCare",
+      startYear,
+      endYear,
+      annualAmount,
+      model: annualIncrease !== 0 ? "linear" : "flat",
+      annualIncrease,
+    },
+  ]);
+}
+
+function convertLegacyChildFields(overridesRaw: Record<string, unknown>): SupportPlan[] {
+  const rawStarts = overridesRaw["kidsStarts"];
+  const annualAmount = asNumber(overridesRaw["kidsAnnual"]);
+  const years = asNumber(overridesRaw["kidsYears"]);
+  if (!Array.isArray(rawStarts) || annualAmount === null || annualAmount <= 0 || years === null || years <= 0) return [];
+  const starts = rawStarts
+    .map((value) => asNumber(value))
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
+  return assignSupportNames(starts.map((startYear, idx) => ({
+    name: `Child Support ${starts.length > 1 ? idx + 1 : ""}`.trim(),
+    category: "childSupport",
+    startYear,
+    endYear: startYear + years - 1,
+    annualAmount,
+    model: "flat",
+    annualIncrease: 0,
+  })));
+}
+
+function convertIntermediateElderCare(input: unknown): SupportPlan[] {
+  if (!Array.isArray(input)) return [];
+  const supports: SupportPlan[] = [];
+  input.forEach((entry, idx) => {
+    if (!entry || typeof entry !== "object") return;
+    const candidate = entry as Record<string, unknown>;
+    const startYear = asNumber(candidate.startYear);
+    const endYear = asNumber(candidate.endYear ?? candidate.stopYear ?? candidate.finishYear);
+    const annualAmount = asNumber(candidate.firstYearAmount ?? candidate.annualAmount ?? candidate.amount);
+    const annualIncrease = asNumber(candidate.annualIncrease ?? candidate.increase ?? candidate.rate ?? 0) ?? 0;
+    if (startYear === null || endYear === null || endYear < startYear || annualAmount === null || annualAmount <= 0) return;
+    const name =
+      typeof candidate.name === "string" && candidate.name.trim().length > 0
+        ? candidate.name.trim()
+        : `Elder Care Support ${idx + 1}`;
+    supports.push({
+      name,
+      category: normalizeSupportCategory(candidate.category ?? candidate.type ?? "elderCare", name),
+      startYear,
+      endYear,
+      annualAmount,
+      model: annualIncrease !== 0 ? "linear" : "flat",
+      annualIncrease,
+    });
+  });
+  return assignSupportNames(supports);
+}
+
+function convertIntermediateChildSupports(input: unknown): SupportPlan[] {
+  if (!Array.isArray(input)) return [];
+  const supports: SupportPlan[] = [];
+  input.forEach((entry, idx) => {
+    if (!entry || typeof entry !== "object") return;
     const candidate = entry as Record<string, unknown>;
     const startYear = asNumber(candidate.startYear);
     const years = asNumber(candidate.years ?? candidate.duration ?? candidate.length);
     const annualAmount = asNumber(candidate.annualAmount ?? candidate.amount);
-    if (startYear === null || annualAmount === null || annualAmount <= 0 || years === null || years <= 0) continue;
-    const duration = years;
+    const model = normalizeSupportModel(candidate.model ?? candidate.rateModelType);
+    const annualIncrease = asNumber(candidate.annualIncrease ?? candidate.increase ?? candidate.rate ?? 0) ?? 0;
+    if (startYear === null || years === null || years <= 0 || annualAmount === null || annualAmount <= 0) return;
+    const name =
+      typeof candidate.name === "string" && candidate.name.trim().length > 0
+        ? candidate.name.trim()
+        : `Child Support ${idx + 1}`;
     supports.push({
+      name,
+      category: normalizeSupportCategory(candidate.category ?? candidate.type ?? "childSupport", name),
       startYear,
-      years: duration,
+      endYear: startYear + years - 1,
       annualAmount,
+      model,
+      annualIncrease: model === "linear" ? annualIncrease : 0,
     });
-  }
-  return supports;
+  });
+  return assignSupportNames(supports);
 }
 
-function sanitizeKidsStarts(input: unknown): number[] {
-  if (!Array.isArray(input)) return [];
-  return input
-    .map((value) => asNumber(value))
-    .filter((value): value is number => value !== null)
-    .sort((a, b) => a - b);
-}
-
-function extractLegacyElderCare(overridesRaw: Record<string, unknown>): ElderCareSupport[] {
-  const startYear = asNumber(overridesRaw["parentStart"]);
-  const endYear = asNumber(overridesRaw["parentEndYear"]);
-  if (startYear === null || endYear === null) return [];
-  const firstYearAmount =
-    asNumber(overridesRaw["parentBaseAnnual"] ?? overridesRaw["parentAnnual"]) ?? LEGACY_PARENT_FIRST_YEAR_AMOUNT;
-  if (firstYearAmount <= 0) return [];
-  const inc = asNumber(overridesRaw["parentInc"]) ?? 0;
+function convertLegacyMortgageFields(overridesRaw: Record<string, unknown>, base: ScenarioParams): MortgagePlan[] {
+  const principal = asNumber(overridesRaw["mortgage0"]);
+  if (principal === null || principal <= 0) return [];
+  const rate = asNumber(overridesRaw["mortgageRate"]) ?? base.mortgages[0]?.rate ?? 0.04;
+  const inferredEndYear = asNumber(overridesRaw["mortgageEndYear"]) ?? base.startYear + 30;
+  const paymentMonthly =
+    asNumber(overridesRaw["mortgagePaymentMonthly"]) ??
+    calculateMortgagePayment(principal, rate, Math.max(1, inferredEndYear - base.startYear));
+  const endMonth = clampMonthNumber(asNumber(overridesRaw["mortgageEndMonth"]), 12);
   return [
     {
-      startYear,
-      endYear,
-      firstYearAmount,
-      annualIncrease: inc,
+      name: "Mortgage 1",
+      principal,
+      rate,
+      paymentMonthly,
+      startYear: base.startYear,
+      startMonth: 1,
+      endYear: inferredEndYear,
+      endMonth,
     },
   ];
-}
-
-function extractLegacyChildSupports(overridesRaw: Record<string, unknown>): { supports: ChildSupport[]; starts: number[] } {
-  const rawStarts = overridesRaw["kidsStarts"];
-  const annualAmount = asNumber(overridesRaw["kidsAnnual"]);
-  const years = asNumber(overridesRaw["kidsYears"]);
-  if (!Array.isArray(rawStarts) || annualAmount === null || annualAmount <= 0 || years === null || years <= 0) {
-    return { supports: [], starts: [] };
-  }
-  const sanitizedStarts = rawStarts
-    .map((value) => asNumber(value))
-    .filter((value): value is number => value !== null)
-    .sort((a, b) => a - b);
-  return {
-    starts: sanitizedStarts,
-    supports: sanitizedStarts.map((startYear) => ({
-      startYear,
-      years,
-      annualAmount,
-    })),
-  };
 }
 
 function asNumber(value: unknown): number | null {
@@ -331,6 +442,75 @@ function asNumber(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+}
+
+function normalizeSupportModel(raw: unknown): SupportModelType {
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized.startsWith("lin")) return "linear";
+  }
+  return "flat";
+}
+
+function normalizeSupportCategory(raw: unknown, fallbackName: unknown): SupportCategory {
+  const normalized = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (
+    normalized.includes("child") ||
+    normalized.includes("kid") ||
+    normalized.includes("college") ||
+    normalized.includes("offspring")
+  ) {
+    return "childSupport";
+  }
+  if (
+    normalized.includes("elder") ||
+    normalized.includes("parent") ||
+    normalized.includes("care") ||
+    normalized.includes("family")
+  ) {
+    return "elderCare";
+  }
+  const fallback = typeof fallbackName === "string" ? fallbackName.trim().toLowerCase() : "";
+  if (fallback.includes("child") || fallback.includes("college") || fallback.includes("kid")) {
+    return "childSupport";
+  }
+  return "elderCare";
+}
+
+function assignSupportNames(plans: SupportPlan[]): SupportPlan[] {
+  let elderIndex = 0;
+  let childIndex = 0;
+  return plans.map((plan) => {
+    if (plan.category === "elderCare") {
+      elderIndex += 1;
+      const name = elderIndex === 1 ? "Parent" : `Parent ${elderIndex}`;
+      return { ...plan, name, model: "linear" };
+    }
+    childIndex += 1;
+    const name = `Child ${childIndex}`;
+    return { ...plan, name, model: "flat", annualIncrease: 0 };
+  });
+}
+
+function assignMortgageNames(plans: MortgagePlan[]): MortgagePlan[] {
+  return plans.map((plan, idx) => {
+    const name =
+      typeof plan.name === "string" && plan.name.trim().length > 0 ? plan.name.trim() : `Mortgage ${idx + 1}`;
+    return {
+      ...plan,
+      name,
+      startMonth: clampMonthNumber(plan.startMonth, 1),
+      endMonth: clampMonthNumber(plan.endMonth, 12),
+    };
+  });
+}
+
+function clampMonthNumber(value: number | null | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  if (rounded < 1) return 1;
+  if (rounded > 12) return 12;
+  return rounded;
 }
 
 function createDeterministicRng(seed: number): () => number {

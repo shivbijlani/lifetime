@@ -15,8 +15,9 @@ import {
   defaultParams,
   deriveParamsFromQuery,
   type ScenarioParams,
-  type ElderCareSupport,
-  type ChildSupport,
+  type SupportPlan,
+  type SupportCategory,
+  type MortgagePlan,
 } from "@/lib/scenario";
 import { SITE_TAGLINE, SITE_TITLE } from "@/lib/branding";
 
@@ -31,8 +32,9 @@ type Row = {
     mortgage: number;
     vacation: number;
     upgrades: number;
-    parents: number;
-    kids: number;
+    elderCareSupport: number;
+    childSupport: number;
+    supportTotal: number;
   };
   totals: {
     totalExpenses: number;
@@ -56,13 +58,56 @@ function expectedStockReturn(age: number, p: Params): number {
   return p.gpPostRet;
 }
 
+function supportAmountForYear(plan: SupportPlan, year: number): number {
+  if (year < plan.startYear || year > plan.endYear) return 0;
+  if (plan.model === "linear") {
+    const yearsSinceStart = year - plan.startYear;
+    return Math.max(0, plan.annualAmount + plan.annualIncrease * yearsSinceStart);
+  }
+  return Math.max(0, plan.annualAmount);
+}
+
+function renameSupports(plans: SupportPlan[]): SupportPlan[] {
+  let elderIndex = 0;
+  let childIndex = 0;
+  return plans.map((plan) => {
+    if (plan.category === "elderCare") {
+      elderIndex += 1;
+      const name = elderIndex === 1 ? "Parent" : `Parent ${elderIndex}`;
+      return { ...plan, name, model: "linear" };
+    }
+    childIndex += 1;
+    const name = `Child ${childIndex}`;
+    return { ...plan, name, model: "flat", annualIncrease: 0 };
+  });
+}
+
+const clampMonthValue = (value: number) => {
+  if (!Number.isFinite(value)) return 1;
+  const rounded = Math.round(value);
+  if (rounded < 1) return 1;
+  if (rounded > 12) return 12;
+  return rounded;
+};
+
+function renameMortgages(plans: MortgagePlan[]): MortgagePlan[] {
+  return plans.map((plan, idx) => ({
+    ...plan,
+    name: plan.name && plan.name.trim().length > 0 ? plan.name.trim() : `Mortgage ${idx + 1}`,
+    startMonth: clampMonthValue(plan.startMonth ?? 1),
+    endMonth: clampMonthValue(plan.endMonth ?? 12),
+  }));
+}
+
 function computeModel(p: Params) {
   const rows: Row[] = [];
   let stocks = p.stocks0;
   let cash = p.cash0;
   let re = p.realEstate0;
-  let mortgage = p.mortgage0;
-  const mr = p.mortgageRate / 12;
+  const mortgageStates = p.mortgages.map((mortgage) => ({
+    plan: mortgage,
+    balance: Math.max(0, mortgage.principal),
+  }));
   const endYear = p.startYear + (p.maxAge - p.currentAge);
   for (let year = p.startYear; year <= endYear; year++) {
     const yrIndex = year - p.startYear;
@@ -73,28 +118,43 @@ function computeModel(p: Params) {
     const vacAnnual = p.vacationMonthly * 12 * Math.pow(1 + p.inflation, yrIndex);
     const upgrades = p.homeUpgradesAnnual * Math.pow(1 + p.inflation, yrIndex);
     let mortAnnual = 0;
-    if (mortgage > 0) {
-      for (let m = 1; m <= 12; m++) {
-        const inWindow = year < p.mortgageEndYear || (year === p.mortgageEndYear && m <= p.mortgageEndMonth);
-        if (!inWindow || mortgage <= 0) break;
-        const interest = mortgage * mr;
-        const principal = Math.min(Math.max(p.mortgagePaymentMonthly - interest, 0), mortgage);
-        mortAnnual += principal + interest;
-        mortgage -= principal;
+    mortgageStates.forEach((state) => {
+      if (state.balance <= 0) return;
+      const { plan } = state;
+      for (let month = 1; month <= 12; month++) {
+        const beforeStart = year < plan.startYear || (year === plan.startYear && month < plan.startMonth);
+        if (beforeStart) continue;
+        const pastEnd = year > plan.endYear || (year === plan.endYear && month > plan.endMonth);
+        if (pastEnd) continue;
+        if (state.balance <= 0) break;
+        const interest = state.balance * (plan.rate / 12);
+        const principal = Math.min(Math.max(plan.paymentMonthly - interest, 0), state.balance);
+        const payment = principal + interest;
+        if (payment <= 0) continue;
+        mortAnnual += payment;
+        state.balance -= principal;
+        if (state.balance <= 0) {
+          state.balance = 0;
+          break;
+        }
       }
-    }
-    const parents = p.elderCare.reduce((total, support) => {
-      if (year < support.startYear || year > support.endYear) return total;
-      const yearsSinceStart = year - support.startYear;
-      const amount = support.firstYearAmount + support.annualIncrease * yearsSinceStart;
-      return total + Math.max(0, amount);
-    }, 0);
-    const kids = p.childSupports.reduce((total, support) => {
-      if (year < support.startYear || year >= support.startYear + support.years) return total;
-      return total + Math.max(0, support.annualAmount);
-    }, 0);
+    });
+    const supportAgg = p.supports.reduce(
+      (acc, support) => {
+        const amount = supportAmountForYear(support, year);
+        if (amount <= 0) return acc;
+        acc.total += amount;
+        if (support.category === "elderCare") {
+          acc.elder += amount;
+        } else {
+          acc.child += amount;
+        }
+        return acc;
+      },
+      { elder: 0, child: 0, total: 0 },
+    );
     const incomeFunded = baseAnnual + mortAnnual + vacAnnual + upgrades;
-    const totalExpenses = incomeFunded + parents + kids;
+    const totalExpenses = incomeFunded + supportAgg.total;
     const income = working ? incomeFunded : 0;
     const savingsFundedExpenses = Math.max(totalExpenses - income, 0);
     const stockR = p.useGlidepath ? expectedStockReturn(age, p) : p.stockReturn;
@@ -132,15 +192,32 @@ function computeModel(p: Params) {
     stocks = Math.max(0, stocksAfter);
     cash = Math.max(0, cashAfter);
     re = reBefore;
-    const netWorth = hasShortfall ? 0 : stocks + cash + (re - mortgage);
+    const totalMortgageBalance = mortgageStates.reduce((sum, state) => sum + Math.max(0, state.balance), 0);
+    const netWorth = hasShortfall ? 0 : stocks + cash + (re - totalMortgageBalance);
     rows.push({
       year,
       age,
       stockReturnApplied: stockR,
       contribution,
       income,
-      expenses: { base: baseAnnual, mortgage: mortAnnual, vacation: vacAnnual, upgrades, parents, kids },
-      totals: { totalExpenses, savingsFundedExpenses, stocksEnd: stocks, cashEnd: cash, realEstateEnd: re, mortgage, netWorth },
+      expenses: {
+        base: baseAnnual,
+        mortgage: mortAnnual,
+        vacation: vacAnnual,
+        upgrades,
+        elderCareSupport: supportAgg.elder,
+        childSupport: supportAgg.child,
+        supportTotal: supportAgg.total,
+      },
+      totals: {
+        totalExpenses,
+        savingsFundedExpenses,
+        stocksEnd: stocks,
+        cashEnd: cash,
+        realEstateEnd: re,
+        mortgage: totalMortgageBalance,
+        netWorth,
+      },
     });
   }
   return rows;
@@ -167,8 +244,134 @@ export default function App() {
   const rows = useMemo(() => computeModel(params), [params]);
   const projectionEndYear = params.startYear + (params.maxAge - params.currentAge);
   const realFactor = (year: number) => (realDollars ? 1 / Math.pow(1 + params.inflation, year - params.startYear) : 1);
+  const supports: SupportPlan[] = Array.isArray(params.supports) ? params.supports : [];
+  const mortgages: MortgagePlan[] = Array.isArray(params.mortgages) ? params.mortgages : [];
+  const totalMortgagePrincipal = mortgages.reduce((sum, mortgage) => sum + mortgage.principal, 0);
   const incomeFundedSubtotal =
-    params.baseMonthly * 12 + params.vacationMonthly * 12 + params.homeUpgradesAnnual + params.mortgagePaymentMonthly * 12;
+    params.baseMonthly * 12 +
+    params.vacationMonthly * 12 +
+    params.homeUpgradesAnnual +
+    mortgages.reduce((sum, mortgage) => sum + mortgage.paymentMonthly * 12, 0);
+
+  const addSupport = (category: SupportCategory) => {
+    setParams((prev) => {
+      const currentSupports = Array.isArray(prev.supports) ? prev.supports : [];
+      const startYear = prev.startYear;
+      const endYear =
+        category === "elderCare" ? startYear + 9 : startYear + 3;
+      const newSupport: SupportPlan = {
+        name: "",
+        category,
+        startYear,
+        endYear,
+        annualAmount: category === "elderCare" ? 12_000 : 10_000,
+        model: category === "elderCare" ? "linear" : "flat",
+        annualIncrease: category === "elderCare" ? 1_000 : 0,
+      };
+      return { ...prev, supports: renameSupports([...currentSupports, newSupport]) };
+    });
+  };
+
+  const updateSupport = (index: number, updates: Partial<SupportPlan>) =>
+    setParams((prev) => {
+      const currentSupports = Array.isArray(prev.supports) ? prev.supports : [];
+      const existing = currentSupports[index];
+      if (!existing) return prev;
+
+      const baseModel = existing.category === "elderCare" ? "linear" : "flat";
+      const nextSupport: SupportPlan = {
+        ...existing,
+        ...updates,
+        category: existing.category,
+        model: baseModel,
+      };
+
+      nextSupport.startYear = Math.round(Math.max(0, nextSupport.startYear));
+      nextSupport.endYear = Math.round(Math.max(0, nextSupport.endYear));
+      nextSupport.annualAmount = Math.max(0, nextSupport.annualAmount);
+
+      if (nextSupport.endYear < nextSupport.startYear) {
+        if (updates.endYear !== undefined && updates.startYear === undefined) {
+          nextSupport.startYear = nextSupport.endYear;
+        } else {
+          nextSupport.endYear = nextSupport.startYear;
+        }
+      }
+
+      if (existing.category === "childSupport") {
+        nextSupport.annualIncrease = 0;
+      } else if (!Number.isFinite(nextSupport.annualIncrease)) {
+        nextSupport.annualIncrease = 0;
+      }
+
+      const nextSupports = currentSupports.map((support, idx) => (idx === index ? nextSupport : support));
+      return { ...prev, supports: renameSupports(nextSupports) };
+    });
+
+  const removeSupport = (index: number) =>
+    setParams((prev) => {
+      const currentSupports = Array.isArray(prev.supports) ? prev.supports : [];
+      if (!currentSupports[index]) return prev;
+      const nextSupports = currentSupports.filter((_, idx) => idx !== index);
+      return { ...prev, supports: renameSupports(nextSupports) };
+    });
+
+  const addMortgage = () =>
+    setParams((prev) => {
+      const currentMortgages = Array.isArray(prev.mortgages) ? prev.mortgages : [];
+      const startYear = prev.startYear;
+      const newMortgage: MortgagePlan = {
+        name: "",
+        principal: currentMortgages[0]?.principal ?? 400_000,
+        rate: currentMortgages[0]?.rate ?? 0.045,
+        paymentMonthly: currentMortgages[0]?.paymentMonthly ?? 2_200,
+        startYear,
+        startMonth: 1,
+        endYear: startYear + 30,
+        endMonth: 12,
+      };
+      return { ...prev, mortgages: renameMortgages([...currentMortgages, newMortgage]) };
+    });
+
+  const updateMortgage = (index: number, updates: Partial<MortgagePlan>) =>
+    setParams((prev) => {
+      const currentMortgages = Array.isArray(prev.mortgages) ? prev.mortgages : [];
+      const existing = currentMortgages[index];
+      if (!existing) return prev;
+      const nextMortgage: MortgagePlan = {
+        ...existing,
+        ...updates,
+      };
+      nextMortgage.principal = Math.max(0, nextMortgage.principal);
+      nextMortgage.rate = Math.max(0, nextMortgage.rate);
+      nextMortgage.paymentMonthly = Math.max(0, nextMortgage.paymentMonthly);
+      nextMortgage.startYear = Math.round(nextMortgage.startYear);
+      nextMortgage.endYear = Math.round(nextMortgage.endYear);
+      nextMortgage.startMonth = clampMonthValue(nextMortgage.startMonth ?? 1);
+      nextMortgage.endMonth = clampMonthValue(nextMortgage.endMonth ?? 12);
+      if (nextMortgage.endYear < nextMortgage.startYear) {
+        if (updates.endYear !== undefined && updates.startYear === undefined) {
+          nextMortgage.startYear = nextMortgage.endYear;
+        } else {
+          nextMortgage.endYear = nextMortgage.startYear;
+        }
+      }
+      const nextMortgages = currentMortgages.map((mortgage, idx) => (idx === index ? nextMortgage : mortgage));
+      return { ...prev, mortgages: renameMortgages(nextMortgages) };
+    });
+
+  const removeMortgage = (index: number) =>
+    setParams((prev) => {
+      const currentMortgages = Array.isArray(prev.mortgages) ? prev.mortgages : [];
+      if (!currentMortgages[index]) return prev;
+      const nextMortgages = currentMortgages.filter((_, idx) => idx !== index);
+      return { ...prev, mortgages: renameMortgages(nextMortgages) };
+    });
+
+  const supportEntries = supports.map((support, index) => ({ support, index }));
+  const elderSupportEntries = supportEntries.filter((entry) => entry.support.category === "elderCare");
+  const childSupportEntries = supportEntries.filter((entry) => entry.support.category === "childSupport");
+  const mortgageEntries = mortgages.map((mortgage, index) => ({ mortgage, index }));
   const handleCopyReset = useCallback(() => {
     if (copyResetTimer.current) {
       clearTimeout(copyResetTimer.current);
@@ -216,9 +419,24 @@ export default function App() {
     const r = computeModel(p);
     const expected = (p.startYear + (p.maxAge - p.currentAge)) - p.startYear + 1;
     console.assert(r.length === expected, "row count matches span");
-    const p2 = { ...defaultParams(), mortgage0: 100_000, mortgageRate: 0.05, mortgagePaymentMonthly: 1_000, mortgageEndYear: 2027, mortgageEndMonth: 6, maxAge: 70 } as Params;
+    const p2 = defaultParams();
+    p2.maxAge = 70;
+    p2.mortgages = renameMortgages([
+      {
+        name: "",
+        principal: 100_000,
+        rate: 0.05,
+        paymentMonthly: 1_000,
+        startYear: p2.startYear,
+        startMonth: 1,
+        endYear: p2.startYear + 3,
+        endMonth: 6,
+      },
+    ]);
     const r2 = computeModel(p2);
-    const afterEnd = r2.filter(x => x.year > p2.mortgageEndYear).every(x => Math.abs(x.expenses.mortgage) < 1e-6);
+    const afterEnd = r2
+      .filter((x) => x.year > p2.mortgages[0].endYear)
+      .every((x) => Math.abs(x.expenses.mortgage) < 1e-6);
     console.assert(afterEnd, "mortgage ends when specified");
     const p3a = { ...defaultParams(), spendFromStocks: true, maxAge: 62 } as Params;
     const p3b = { ...defaultParams(), spendFromStocks: false, cash0: 1_000_000, maxAge: 62 } as Params;
@@ -375,8 +593,9 @@ export default function App() {
                       <Input type="number" value={params.realEstate0} onChange={(e) => setParams({ ...params, realEstate0: Number(e.target.value || 0) })} />
                     </div>
                     <div>
-                      <Label>Mortgage principal outstanding</Label>
-                      <Input type="number" value={params.mortgage0} onChange={(e) => setParams({ ...params, mortgage0: Number(e.target.value || 0) })} />
+                      <Label>Total Mortgage Principal (read-only)</Label>
+                      <Input readOnly type="number" value={Math.round(totalMortgagePrincipal)} className="bg-muted" />
+                      <p className="text-xs text-muted-foreground">Update individual mortgages in the Real Estate section.</p>
                     </div>
                   </div>
                 </AccordionContent>
@@ -468,28 +687,104 @@ export default function App() {
                       <Input type="number" step="0.1" value={(params.realEstateReturn * 100).toFixed(1)} onChange={(e) => setParams({ ...params, realEstateReturn: Number(e.target.value) / 100 })} />
                     </div>
                   </div>
-                  <h3 className="font-medium pt-4">Mortgage Details</h3>
-                  <div className="grid grid-cols-2 gap-4 pt-2">
-                    <div className="col-span-2">
-                      <Label>Mortgage principal outstanding (today)</Label>
-                      <Input type="number" value={params.mortgage0} onChange={(e) => setParams({ ...params, mortgage0: Number(e.target.value || 0) })} />
-                    </div>
-                    <div>
-                      <Label>Rate (%)</Label>
-                      <Input type="number" step="0.01" value={(params.mortgageRate * 100).toFixed(3)} onChange={(e) => setParams({ ...params, mortgageRate: Number(e.target.value) / 100 })} />
-                    </div>
-                    <div>
-                      <Label>Mortgage Payment (monthly)</Label>
-                      <Input type="number" value={params.mortgagePaymentMonthly} onChange={(e) => setParams({ ...params, mortgagePaymentMonthly: Number(e.target.value || 0) })} />
-                    </div>
-                    <div>
-                      <Label>Loan End Year</Label>
-                      <Input type="number" value={params.mortgageEndYear} onChange={(e) => setParams({ ...params, mortgageEndYear: Number(e.target.value || 0) })} />
-                    </div>
-                    <div>
-                      <Label>Loan End Month (1-12)</Label>
-                      <Input type="number" value={params.mortgageEndMonth} onChange={(e) => setParams({ ...params, mortgageEndMonth: Number(e.target.value || 0) })} />
-                    </div>
+                  <h3 className="font-medium pt-4">Mortgages</h3>
+                  <p className="text-sm text-muted-foreground">Manage balances, rates, and payoff timelines for each mortgage.</p>
+                  <div className="space-y-4 pt-2">
+                    {mortgageEntries.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-muted-foreground/40 p-4 text-sm text-muted-foreground">
+                        No mortgages added yet.
+                      </div>
+                    ) : (
+                      mortgageEntries.map(({ mortgage, index }) => (
+                        <div
+                          key={`mortgage-${index}-${mortgage.startYear}-${mortgage.endYear}`}
+                          className="space-y-3 rounded-md border border-border bg-card/50 p-3"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <p className="text-sm font-medium text-foreground">{mortgage.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Active {mortgage.startYear}–{mortgage.endYear}
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="text-muted-foreground hover:text-destructive"
+                              onClick={() => removeMortgage(index)}
+                              aria-label={`Remove ${mortgage.name}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            <div className="space-y-2">
+                              <Label>Principal Outstanding ($)</Label>
+                              <Input
+                                type="number"
+                                value={mortgage.principal}
+                                onChange={(e) => updateMortgage(index, { principal: Number(e.target.value || 0) })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Rate (%)</Label>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={(mortgage.rate * 100).toFixed(3)}
+                                onChange={(e) => updateMortgage(index, { rate: Number(e.target.value || 0) / 100 })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Monthly Payment ($)</Label>
+                              <Input
+                                type="number"
+                                value={mortgage.paymentMonthly}
+                                onChange={(e) => updateMortgage(index, { paymentMonthly: Number(e.target.value || 0) })}
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                            <div className="space-y-2">
+                              <Label>Start Year</Label>
+                              <Input
+                                type="number"
+                                value={mortgage.startYear}
+                                onChange={(e) => updateMortgage(index, { startYear: Number(e.target.value || 0) })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Start Month (1-12)</Label>
+                              <Input
+                                type="number"
+                                value={mortgage.startMonth}
+                                onChange={(e) => updateMortgage(index, { startMonth: Number(e.target.value || 0) })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>End Year</Label>
+                              <Input
+                                type="number"
+                                value={mortgage.endYear}
+                                onChange={(e) => updateMortgage(index, { endYear: Number(e.target.value || 0) })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>End Month (1-12)</Label>
+                              <Input
+                                type="number"
+                                value={mortgage.endMonth}
+                                onChange={(e) => updateMortgage(index, { endMonth: Number(e.target.value || 0) })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    <Button variant="outline" size="sm" onClick={addMortgage}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Mortgage
+                    </Button>
                   </div>
                 </AccordionContent>
               </AccordionItem>
@@ -519,10 +814,6 @@ export default function App() {
                           </Label>
                           <Input type="number" value={params.homeUpgradesAnnual} onChange={(e) => setParams({ ...params, homeUpgradesAnnual: Number(e.target.value || 0) })} />
                         </div>
-                        <div>
-                          <Label>Mortgage Payment (monthly)</Label>
-                          <Input type="number" value={params.mortgagePaymentMonthly} onChange={(e) => setParams({ ...params, mortgagePaymentMonthly: Number(e.target.value || 0) })} />
-                        </div>
                       </div>
                       <div className="rounded-md bg-muted px-3 py-2 text-sm font-medium">
                         Annual subtotal: ${currency(incomeFundedSubtotal)}
@@ -530,44 +821,151 @@ export default function App() {
                     </div>
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Savings Funded Expenses</h3>
-                      <p className="text-sm text-muted-foreground">Customize support that will be funded from savings or portfolio withdrawals.</p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <Label>Parent Support Begins (year)</Label>
-                          <Input type="number" value={params.parentStart} onChange={(e) => setParams({ ...params, parentStart: Number(e.target.value || 0) })} />
+                      <p className="text-sm text-muted-foreground">Customize savings-funded support for family needs.</p>
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <h4 className="text-sm font-semibold text-foreground">Elder Care Support</h4>
+                              <p className="text-xs text-muted-foreground">Set aside funds to assist parents or other elders.</p>
+                            </div>
+                            <Button variant="outline" size="sm" onClick={() => addSupport("elderCare")}>
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add Parent Support
+                            </Button>
+                          </div>
+                          {elderSupportEntries.length === 0 ? (
+                            <div className="rounded-md border border-dashed border-muted-foreground/40 p-4 text-sm text-muted-foreground">
+                              No parent support planned yet.
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              {elderSupportEntries.map(({ support, index }) => (
+                                <div
+                                  key={`elder-${index}-${support.startYear}-${support.endYear}`}
+                                  className="space-y-3 rounded-md border border-border bg-card/50 p-3"
+                                >
+                                  <div className="flex items-start justify-between">
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{support.name}</p>
+                                      <p className="text-xs text-muted-foreground">Starts in {support.startYear}</p>
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="text-muted-foreground hover:text-destructive"
+                                      onClick={() => removeSupport(index)}
+                                      aria-label={`Remove ${support.name}`}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                                    <div className="space-y-2">
+                                      <Label>Start Year</Label>
+                                      <Input
+                                        type="number"
+                                        value={support.startYear}
+                                        onChange={(e) => updateSupport(index, { startYear: Number(e.target.value || 0) })}
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label>End Year</Label>
+                                      <Input
+                                        type="number"
+                                        value={support.endYear}
+                                        onChange={(e) => updateSupport(index, { endYear: Number(e.target.value || 0) })}
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label>Annual Amount ($)</Label>
+                                      <Input
+                                        type="number"
+                                        value={support.annualAmount}
+                                        onChange={(e) => updateSupport(index, { annualAmount: Number(e.target.value || 0) })}
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label>Annual Increase ($)</Label>
+                                      <Input
+                                        type="number"
+                                        value={support.annualIncrease}
+                                        onChange={(e) => updateSupport(index, { annualIncrease: Number(e.target.value || 0) })}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        <div>
-                          <Label>Parent Support Ends (year)</Label>
-                          <Input type="number" value={params.parentEndYear} onChange={(e) => setParams({ ...params, parentEndYear: Number(e.target.value || 0) })} />
-                        </div>
-                        <div>
-                          <Label>Annual Increase for Parents ($)</Label>
-                          <Input type="number" value={params.parentInc} onChange={(e) => setParams({ ...params, parentInc: Number(e.target.value || 0) })} />
-                        </div>
-                        <div>
-                          <Label>Kids Cost (annual)</Label>
-                          <Input type="number" value={params.kidsAnnual} onChange={(e) => setParams({ ...params, kidsAnnual: Number(e.target.value || 0) })} />
-                        </div>
-                        <div>
-                          <Label>Kids Support Duration (years)</Label>
-                          <Input type="number" value={params.kidsYears} onChange={(e) => setParams({ ...params, kidsYears: Number(e.target.value || 0) })} />
-                        </div>
-                        <div className="md:col-span-2">
-                          <Label>Kids Start Years (comma separated)</Label>
-                          <Input
-                            type="text"
-                            value={params.kidsStarts.join(", ")}
-                            onChange={(e) => {
-                              const next = e.target.value
-                                .split(",")
-                                .map((piece) => piece.trim())
-                                .filter((piece) => piece.length > 0)
-                                .map((piece) => Number(piece))
-                                .filter((num) => Number.isFinite(num))
-                                .sort((a, b) => a - b);
-                              setParams({ ...params, kidsStarts: next });
-                            }}
-                          />
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <h4 className="text-sm font-semibold text-foreground">Education Support</h4>
+                              <p className="text-xs text-muted-foreground">Plan for college or other child-related costs.</p>
+                            </div>
+                            <Button variant="outline" size="sm" onClick={() => addSupport("childSupport")}>
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add Child Support
+                            </Button>
+                          </div>
+                          {childSupportEntries.length === 0 ? (
+                            <div className="rounded-md border border-dashed border-muted-foreground/40 p-4 text-sm text-muted-foreground">
+                              No child support planned yet.
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              {childSupportEntries.map(({ support, index }) => (
+                                <div
+                                  key={`child-${index}-${support.startYear}-${support.endYear}`}
+                                  className="space-y-3 rounded-md border border-border bg-card/50 p-3"
+                                >
+                                  <div className="flex items-start justify-between">
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{support.name}</p>
+                                      <p className="text-xs text-muted-foreground">Fixed annual funding for education costs.</p>
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="text-muted-foreground hover:text-destructive"
+                                      onClick={() => removeSupport(index)}
+                                      aria-label={`Remove ${support.name}`}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                                    <div className="space-y-2">
+                                      <Label>Start Year</Label>
+                                      <Input
+                                        type="number"
+                                        value={support.startYear}
+                                        onChange={(e) => updateSupport(index, { startYear: Number(e.target.value || 0) })}
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label>End Year</Label>
+                                      <Input
+                                        type="number"
+                                        value={support.endYear}
+                                        onChange={(e) => updateSupport(index, { endYear: Number(e.target.value || 0) })}
+                                      />
+                                    </div>
+                                    <div className="space-y-2 lg:col-span-2">
+                                      <Label>Annual Amount ($)</Label>
+                                      <Input
+                                        type="number"
+                                        value={support.annualAmount}
+                                        onChange={(e) => updateSupport(index, { annualAmount: Number(e.target.value || 0) })}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -648,8 +1046,9 @@ export default function App() {
                   <th className="py-2 pr-3">Mortgage</th>
                   <th className="py-2 pr-3">Vacation</th>
                   <th className="py-2 pr-3">Home Exp.</th>
-                  <th className="py-2 pr-3">Parents</th>
-                  <th className="py-2 pr-3">Kids</th>
+                  <th className="py-2 pr-3">Support (Elder)</th>
+                  <th className="py-2 pr-3">Support (Child)</th>
+                  <th className="py-2 pr-3">Support Total</th>
                   <th className="py-2 pr-3">Total Expenses</th>
                   <th className="py-2 pr-3">Savings Funded Exp.</th>
                   <th className="py-2 pr-3">Stocks End</th>
@@ -673,8 +1072,9 @@ export default function App() {
                       <td className="py-2 pr-3">${currency(r.expenses.mortgage * f)}</td>
                       <td className="py-2 pr-3">${currency(r.expenses.vacation * f)}</td>
                       <td className="py-2 pr-3">${currency(r.expenses.upgrades * f)}</td>
-                      <td className="py-2 pr-3">${currency(r.expenses.parents * f)}</td>
-                      <td className="py-2 pr-3">${currency(r.expenses.kids * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.elderCareSupport * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.childSupport * f)}</td>
+                      <td className="py-2 pr-3">${currency(r.expenses.supportTotal * f)}</td>
                       <td className="py-2 pr-3 font-medium">${currency(r.totals.totalExpenses * f)}</td>
                       <td className="py-2 pr-3">${currency(r.totals.savingsFundedExpenses * f)}</td>
                       <td className="py-2 pr-3 font-medium">${currency(r.totals.stocksEnd * f)}</td>
