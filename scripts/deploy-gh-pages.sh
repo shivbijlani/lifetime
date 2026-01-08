@@ -9,6 +9,16 @@ DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
 PUBLISH_BRANCH=${PUBLISH_BRANCH:-gh-pages}
 WORKTREE_DIR="$ROOT_DIR/.gh-pages-worktree"
 BUILD_DIR="$ROOT_DIR/out"
+REPO_NAME=${REPO_NAME:-$(basename -s .git "$(git config --get remote.origin.url)")}
+PAGES_REPO_SUFFIX=".github.io"
+
+if [ -z "${NEXT_PUBLIC_BASE_PATH:-}" ]; then
+  if [[ "$REPO_NAME" == *"$PAGES_REPO_SUFFIX" ]]; then
+    export NEXT_PUBLIC_BASE_PATH="/"
+  else
+    export NEXT_PUBLIC_BASE_PATH="/$REPO_NAME"
+  fi
+fi
 
 if [ "${ALLOW_DIRTY:-0}" != "1" ]; then
   if ! git diff --quiet || ! git diff --cached --quiet; then
