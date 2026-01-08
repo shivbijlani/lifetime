@@ -1,4 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="Lifetime">
   <rect width="180" height="180" rx="32" fill="#2563eb"/>
-  <path d="M66 54h24v66h42v24H66V54z" fill="#ffffff"/>
+  <path d="M60 112V68h16l14 18 14-18h16v44h-16V88l-14 18-14-18v24H60z" fill="#ffffff"/>
 </svg>
