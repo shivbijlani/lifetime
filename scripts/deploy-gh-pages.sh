@@ -18,7 +18,8 @@ if [ -z "${NEXT_PUBLIC_BASE_PATH:-}" ]; then
   elif [[ "$REPO_NAME" == *"$PAGES_REPO_SUFFIX" ]]; then
     export NEXT_PUBLIC_BASE_PATH="/"
   else
-    export NEXT_PUBLIC_BASE_PATH="/$REPO_NAME"
+    echo "Error: NEXT_PUBLIC_BASE_PATH is not set. Set it to '/$REPO_NAME' for project pages or '/' for custom domains." >&2
+    exit 1
   fi
 fi
 
