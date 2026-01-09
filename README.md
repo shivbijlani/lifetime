@@ -11,7 +11,7 @@ npm run dev
 # visit http://localhost:3000
 ```
 
-When exporting for GitHub Pages, set `NEXT_PUBLIC_BASE_PATH=/lifetime` (or your repository name) before running `npm run export`.
+When exporting for GitHub Pages, set `NEXT_PUBLIC_BASE_PATH=/lifetime` (or your repository name) before running `npm run export`. If you use a custom domain, set `NEXT_PUBLIC_BASE_PATH=/` or run `CUSTOM_DOMAIN=yourdomain.com npm run export` to emit root-relative assets. The deploy script will fail if `NEXT_PUBLIC_BASE_PATH` is not set for project pages.
 
 ## Project Structure
 
