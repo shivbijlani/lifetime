@@ -13,7 +13,9 @@ REPO_NAME=${REPO_NAME:-$(basename -s .git "$(git config --get remote.origin.url)
 PAGES_REPO_SUFFIX=".github.io"
 
 if [ -z "${NEXT_PUBLIC_BASE_PATH:-}" ]; then
-  if [[ "$REPO_NAME" == *"$PAGES_REPO_SUFFIX" ]]; then
+  if [ -n "${CUSTOM_DOMAIN:-}" ] || [ -f "$ROOT_DIR/CNAME" ] || [ -f "$ROOT_DIR/public/CNAME" ]; then
+    export NEXT_PUBLIC_BASE_PATH="/"
+  elif [[ "$REPO_NAME" == *"$PAGES_REPO_SUFFIX" ]]; then
     export NEXT_PUBLIC_BASE_PATH="/"
   else
     export NEXT_PUBLIC_BASE_PATH="/$REPO_NAME"
