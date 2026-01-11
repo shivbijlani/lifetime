@@ -16,6 +16,14 @@ const normalizedBasePath =
 
 const basePath = normalizedBasePath ? `/${normalizedBasePath}` : "";
 
+if (isProd) {
+  console.log(
+    `[next.config] basePath="${basePath || "/"}" customDomain=${
+      usesCustomDomain ? "yes" : "no"
+    } cname=${hasCname ? "yes" : "no"}`
+  );
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "export",
