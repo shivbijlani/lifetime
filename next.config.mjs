@@ -1,11 +1,28 @@
-const isProd = process.env.NODE_ENV === "production";
+import fs from "node:fs";
+import path from "node:path";
 
+const isProd = process.env.NODE_ENV === "production";
+const rootDir = process.cwd();
+const hasCname =
+  fs.existsSync(path.join(rootDir, "CNAME")) ||
+  fs.existsSync(path.join(rootDir, "public", "CNAME"));
+
+const rawBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+const usesCustomDomain = Boolean(process.env.CUSTOM_DOMAIN) || hasCname;
 const normalizedBasePath =
-  process.env.NEXT_PUBLIC_BASE_PATH && process.env.NEXT_PUBLIC_BASE_PATH !== "/"
-    ? process.env.NEXT_PUBLIC_BASE_PATH.replace(/^\/+|\/+$/g, "")
+  !usesCustomDomain && rawBasePath && rawBasePath !== "/"
+    ? rawBasePath.replace(/^\/+|\/+$/g, "")
     : "";
 
 const basePath = normalizedBasePath ? `/${normalizedBasePath}` : "";
+
+if (isProd) {
+  console.log(
+    `[next.config] basePath="${basePath || "/"}" customDomain=${
+      usesCustomDomain ? "yes" : "no"
+    } cname=${hasCname ? "yes" : "no"}`
+  );
+}
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -13,6 +30,9 @@ const nextConfig = {
   trailingSlash: true,
   basePath: isProd ? basePath : "",
   assetPrefix: isProd ? basePath : "",
+  env: {
+    NEXT_PUBLIC_BASE_PATH: basePath,
+  },
 };
 
 export default nextConfig;
