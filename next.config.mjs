@@ -1,8 +1,10 @@
 const isProd = process.env.NODE_ENV === "production";
 
+const rawBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+const usesCustomDomain = Boolean(process.env.CUSTOM_DOMAIN);
 const normalizedBasePath =
-  process.env.NEXT_PUBLIC_BASE_PATH && process.env.NEXT_PUBLIC_BASE_PATH !== "/"
-    ? process.env.NEXT_PUBLIC_BASE_PATH.replace(/^\/+|\/+$/g, "")
+  !usesCustomDomain && rawBasePath && rawBasePath !== "/"
+    ? rawBasePath.replace(/^\/+|\/+$/g, "")
     : "";
 
 const basePath = normalizedBasePath ? `/${normalizedBasePath}` : "";
