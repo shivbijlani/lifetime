@@ -8,7 +8,7 @@ const hasCname =
   fs.existsSync(path.join(rootDir, "public", "CNAME"));
 
 const rawBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-const usesCustomDomain = Boolean(process.env.CUSTOM_DOMAIN) || hasCname;
+const usesCustomDomain = Boolean(process.env.CUSTOM_DOMAIN);
 const normalizedBasePath =
   !usesCustomDomain && rawBasePath && rawBasePath !== "/"
     ? rawBasePath.replace(/^\/+|\/+$/g, "")
