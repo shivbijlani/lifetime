@@ -1,4 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
+
 const isProd = process.env.NODE_ENV === "production";
+const rootDir = process.cwd();
+const hasCname =
+  fs.existsSync(path.join(rootDir, "CNAME")) ||
+  fs.existsSync(path.join(rootDir, "public", "CNAME"));
 
 const rawBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const usesCustomDomain = Boolean(process.env.CUSTOM_DOMAIN);
@@ -15,6 +22,9 @@ const nextConfig = {
   trailingSlash: true,
   basePath: isProd ? basePath : "",
   assetPrefix: isProd ? basePath : "",
+  env: {
+    NEXT_PUBLIC_BASE_PATH: basePath,
+  },
 };
 
 export default nextConfig;
