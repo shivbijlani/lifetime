@@ -1,2 +1,2 @@
-export const SITE_TITLE = "Lifetime";
-export const SITE_TAGLINE = "Because peace of mind is worth planning for.";
+export const SITE_TITLE = "FU Number";
+export const SITE_TAGLINE = "Your walk-away number, calculated.";
